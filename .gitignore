@@ -1,0 +1,22 @@
+# Python 虚拟环境与缓存
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyCharm 与编辑器配置
+.idea/
+.vscode/
+
+# 前端依赖与构建产物
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+
+# 数据库 (毕设建议暂时忽略，防止数据库版本冲突，手动迁移即可)
+db.sqlite3
+
+# 日志与临时文件
+*.log
+tmp/
