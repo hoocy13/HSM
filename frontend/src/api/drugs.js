@@ -126,6 +126,26 @@ export const dashboardApi = {
   // 获取药品关联矩阵
   getDrugCorrelation() {
     return api.get('/dashboard/drug-correlation/')
+  },
+  
+  // 获取库存紧缺Top10
+  getLowStockTop10() {
+    return api.get('/dashboard/low-stock-top10/')
+  },
+  
+  // 获取过期预警分布
+  getExpiryDistribution() {
+    return api.get('/dashboard/expiry-distribution/')
+  },
+  
+  // 获取月度消耗趋势
+  getMonthlyConsumption() {
+    return api.get('/dashboard/monthly-consumption/')
+  },
+  
+  // 获取经常一起被开出的药品Top5
+  getTop5Correlated() {
+    return api.get('/dashboard/top5-correlated/')
   }
 }
 

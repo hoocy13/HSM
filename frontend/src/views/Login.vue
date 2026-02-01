@@ -73,8 +73,8 @@ const loginRules = {
     { required: true, message: '请输入用户名', trigger: 'blur' }
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于6位', trigger: 'blur' }
+    { required: true, message: '请输入密码', trigger: 'blur' }
+    // 登录时不需要验证密码长度，只需要验证密码是否正确
   ]
 }
 
@@ -93,7 +93,16 @@ const handleLogin = async () => {
           localStorage.setItem('user', JSON.stringify(response.data.user))
           
           ElMessage.success('登录成功')
-          router.push('/layout')
+          
+          // 根据角色跳转到不同页面
+          const userRole = response.data.user.role || 'patient'
+          if (userRole === 'admin') {
+            router.push('/layout/dashboard') // 管理员看大屏
+          } else if (userRole === 'doctor') {
+            router.push('/layout/drugs') // 医生看药品管理
+          } else {
+            router.push('/layout/medication-records') // 患者看用药记录
+          }
         } else {
           ElMessage.error('登录失败：未收到 token')
         }

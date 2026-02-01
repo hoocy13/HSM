@@ -68,7 +68,7 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right" v-if="userRole !== 'patient'">
           <template #default="{ row }">
             <el-button
               type="success"
@@ -136,6 +136,15 @@
             v-model="formData.stock"
             :min="0"
             placeholder="请输入库存数量"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="成本价格" prop="cost_price">
+          <el-input-number
+            v-model="formData.cost_price"
+            :min="0"
+            :precision="2"
+            placeholder="请输入成本价格（元）"
             style="width: 100%"
           />
         </el-form-item>
@@ -241,6 +250,7 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const warningDrugs = ref([])
+const userRole = ref('patient')
 
 // 响应式对话框宽度
 const dialogWidth = computed(() => {
@@ -273,6 +283,7 @@ const formData = reactive({
   id: null,
   name: '',
   stock: 0,
+  cost_price: 0,
   expiry_date: null
 })
 
@@ -362,6 +373,7 @@ const handleAdd = () => {
   formData.id = null
   formData.name = ''
   formData.stock = 0
+  formData.cost_price = 0
   formData.expiry_date = null
   dialogVisible.value = true
 }
@@ -372,6 +384,7 @@ const handleEdit = (row) => {
   formData.id = row.id
   formData.name = row.name
   formData.stock = row.stock
+  formData.cost_price = row.cost_price || 0
   formData.expiry_date = row.expiry_date
   dialogVisible.value = true
 }
@@ -444,6 +457,7 @@ const handleSubmit = async () => {
         const data = {
           name: formData.name,
           stock: formData.stock,
+          cost_price: formData.cost_price,
           expiry_date: formData.expiry_date
         }
         
@@ -472,6 +486,7 @@ const resetForm = () => {
   formData.id = null
   formData.name = ''
   formData.stock = 0
+  formData.cost_price = 0
   formData.expiry_date = null
 }
 
@@ -518,6 +533,17 @@ const handleResize = () => {
 
 // 组件挂载时获取数据
 onMounted(() => {
+  // 获取当前用户信息
+  try {
+    const userStr = localStorage.getItem('user')
+    if (userStr) {
+      const user = JSON.parse(userStr)
+      userRole.value = user.role || 'patient'
+    }
+  } catch (e) {
+    console.error('解析用户信息失败:', e)
+  }
+  
   fetchDrugs()
   window.addEventListener('resize', handleResize)
 })

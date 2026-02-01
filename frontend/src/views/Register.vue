@@ -60,6 +60,18 @@
             size="large"
           />
         </el-form-item>
+        <el-form-item prop="role">
+          <el-select
+            v-model="registerForm.role"
+            placeholder="请选择角色"
+            size="large"
+            style="width: 100%"
+          >
+            <el-option label="患者" value="patient" />
+            <el-option label="医生" value="doctor" />
+            <el-option label="管理员" value="admin" />
+          </el-select>
+        </el-form-item>
         <el-form-item>
           <el-button
             type="primary"
@@ -99,7 +111,8 @@ const registerForm = reactive({
   password: '',
   password_confirm: '',
   first_name: '',
-  last_name: ''
+  last_name: '',
+  role: 'patient' // 默认角色为患者
 })
 
 const validatePasswordConfirm = (rule, value, callback) => {

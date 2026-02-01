@@ -33,6 +33,13 @@
         <el-table-column prop="email" label="邮箱" />
         <el-table-column prop="first_name" label="名" />
         <el-table-column prop="last_name" label="姓" />
+        <el-table-column prop="role" label="角色" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.role === 'admin' ? 'danger' : row.role === 'doctor' ? 'warning' : 'info'" size="small">
+              {{ row.role === 'admin' ? '管理员' : row.role === 'doctor' ? '医生' : '患者' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button
@@ -99,6 +106,17 @@
             placeholder="请输入姓"
           />
         </el-form-item>
+        <el-form-item label="角色" prop="role">
+          <el-select
+            v-model="formData.role"
+            placeholder="请选择角色"
+            style="width: 100%"
+          >
+            <el-option label="管理员" value="admin" />
+            <el-option label="医生" value="doctor" />
+            <el-option label="患者" value="patient" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -132,7 +150,8 @@ const formData = reactive({
   username: '',
   email: '',
   first_name: '',
-  last_name: ''
+  last_name: '',
+  role: 'patient'
 })
 
 // 响应式对话框宽度
@@ -172,8 +191,10 @@ const fetchUsers = async () => {
     }
     
     const response = await userApi.getUsers(params)
-    userList.value = response.data.results || []
+    // 使用新数组确保Vue响应式更新
+    userList.value = [...(response.data.results || [])]
     total.value = response.data.count || 0
+    console.log('获取用户列表:', userList.value.map(u => ({ id: u.id, username: u.username, role: u.role })))
   } catch (error) {
     console.error('获取用户列表失败:', error)
     ElMessage.error('获取用户列表失败')
@@ -205,6 +226,7 @@ const handleEdit = (row) => {
   formData.email = row.email || ''
   formData.first_name = row.first_name || ''
   formData.last_name = row.last_name || ''
+  formData.role = row.role || 'patient'
   dialogVisible.value = true
 }
 
@@ -216,16 +238,29 @@ const handleSubmit = async () => {
       try {
         if (isEdit.value) {
           // 更新用户
-          await userApi.updateUser(editingUserId.value, {
+          const response = await userApi.updateUser(editingUserId.value, {
             username: formData.username,
             email: formData.email,
             first_name: formData.first_name,
-            last_name: formData.last_name
+            last_name: formData.last_name,
+            role: formData.role
           })
+          console.log('更新响应数据:', response.data)
           ElMessage.success('更新成功')
+          
+          // 立即更新列表中的用户数据
+          const updatedUser = response.data
+          console.log('更新后的用户角色:', updatedUser.role)
+          const index = userList.value.findIndex(u => u.id === updatedUser.id)
+          if (index !== -1) {
+            // 使用 Vue 3 的响应式更新方式，创建新对象
+            userList.value[index] = { ...userList.value[index], ...updatedUser }
+            console.log('列表更新后的用户数据:', userList.value[index])
+          }
         }
         dialogVisible.value = false
-        fetchUsers()
+        // 强制重新获取用户列表以确保数据同步
+        await fetchUsers()
       } catch (error) {
         console.error('操作失败:', error)
         const errorMsg = error.response?.data
@@ -250,6 +285,7 @@ const resetForm = () => {
   formData.email = ''
   formData.first_name = ''
   formData.last_name = ''
+  formData.role = 'patient'
 }
 
 onMounted(() => {

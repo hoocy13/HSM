@@ -16,25 +16,30 @@
         active-text-color="#409EFF"
         class="sidebar-menu"
       >
-        <el-menu-item index="/layout/dashboard">
+        <!-- 管理员和医生可以看到数据看板 -->
+        <el-menu-item v-if="userRole === 'admin' || userRole === 'doctor'" index="/layout/dashboard">
           <el-icon><DataAnalysis /></el-icon>
           <template #title>数据看板</template>
         </el-menu-item>
-        <el-menu-item index="/layout/drugs">
+        <!-- 管理员和医生可以管理药品 -->
+        <el-menu-item v-if="userRole === 'admin' || userRole === 'doctor'" index="/layout/drugs">
           <el-icon><Goods /></el-icon>
           <template #title>药品管理</template>
         </el-menu-item>
-        <el-menu-item index="/layout/users">
-          <el-icon><User /></el-icon>
-          <template #title>用户管理</template>
-        </el-menu-item>
+        <!-- 所有角色都可以查看用药记录 -->
         <el-menu-item index="/layout/medication-records">
           <el-icon><Document /></el-icon>
           <template #title>用药记录</template>
         </el-menu-item>
-        <el-menu-item index="/layout/warnings">
+        <!-- 管理员可以看到智能预警 -->
+        <el-menu-item v-if="userRole === 'admin'" index="/layout/warnings">
           <el-icon><Warning /></el-icon>
           <template #title>智能预警</template>
+        </el-menu-item>
+        <!-- 只有管理员可以管理用户 -->
+        <el-menu-item v-if="userRole === 'admin'" index="/layout/users">
+          <el-icon><User /></el-icon>
+          <template #title>用户管理</template>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -97,6 +102,7 @@ const route = useRoute()
 
 const isCollapse = ref(false)
 const currentUser = ref(null)
+const userRole = ref('patient') // 默认角色
 
 // 当前激活的菜单
 const activeMenu = computed(() => {
@@ -131,6 +137,7 @@ onMounted(() => {
   if (userStr) {
     try {
       currentUser.value = JSON.parse(userStr)
+      userRole.value = currentUser.value.role || 'patient'
     } catch (e) {
       console.error('解析用户信息失败:', e)
     }

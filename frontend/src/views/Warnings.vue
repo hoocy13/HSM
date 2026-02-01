@@ -12,17 +12,18 @@
       </template>
       
       <el-alert
-        title="预警说明"
+        title="智能预警说明"
         type="info"
         :closable="false"
         show-icon
         style="margin-bottom: 20px"
       >
         <template #default>
-          <p>系统会自动检测以下情况：</p>
+          <p>系统采用动态阈值算法，自动检测以下情况：</p>
           <ul>
-            <li>有效期少于30天的药品</li>
-            <li>库存低于50件的药品</li>
+            <li><strong>有效期预警：</strong>有效期少于30天的药品</li>
+            <li><strong>库存预警：</strong>根据过去30天的平均消耗量，自动计算安全库存天数（默认7天），当前库存低于安全库存时触发预警</li>
+            <li><strong>建议采购量：</strong>系统自动计算建议采购量 = 安全库存 - 当前库存 + 缓冲（安全库存的20%）</li>
           </ul>
         </template>
       </el-alert>
@@ -54,13 +55,33 @@
         </el-table-column>
         <el-table-column label="预警原因" width="200">
           <template #default="{ row }">
-            <el-tag v-if="row.is_expiring_soon" type="danger" size="small" style="margin-right: 5px">
-              即将过期
+            <div v-if="row.warning_reasons && row.warning_reasons.length > 0">
+              <el-tag v-for="reason in row.warning_reasons" :key="reason" 
+                :type="reason === '即将过期' ? 'danger' : 'warning'" 
+                size="small" 
+                style="margin-right: 5px; margin-bottom: 5px">
+                {{ reason }}
+              </el-tag>
+            </div>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="安全库存" width="120" align="center">
+          <template #default="{ row }">
+            <span>{{ row.safety_stock || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="日均消耗" width="120" align="center">
+          <template #default="{ row }">
+            <span>{{ row.avg_daily_consumption !== undefined ? row.avg_daily_consumption : '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="建议采购量" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.suggested_purchase > 0" type="success" size="small">
+              {{ row.suggested_purchase }}件
             </el-tag>
-            <el-tag v-if="row.is_low_stock" type="warning" size="small">
-              库存不足
-            </el-tag>
-            <span v-if="!row.is_expiring_soon && !row.is_low_stock">-</span>
+            <span v-else>-</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">

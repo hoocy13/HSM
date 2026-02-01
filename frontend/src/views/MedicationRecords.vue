@@ -19,10 +19,23 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <el-button type="primary" @click="handleAdd">
-          <el-icon><Plus /></el-icon>
-          添加用药记录
-        </el-button>
+        <div style="display: flex; gap: 10px;">
+          <el-button 
+            v-if="userRole !== 'patient'" 
+            type="primary" 
+            :icon="Document"
+            @click="handleAddPrescription"
+          >
+            开具处方
+          </el-button>
+          <el-button 
+            v-if="userRole !== 'patient'" 
+            :icon="Plus"
+            @click="handleAdd"
+          >
+            添加单条记录
+          </el-button>
+        </div>
       </div>
       
       <div class="table-wrapper">
@@ -33,6 +46,11 @@
           stripe
         >
         <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column prop="prescription_id" label="处方号" width="150">
+          <template #default="{ row }">
+            {{ row.prescription_id || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="drug_name" label="药品名称" />
         <el-table-column prop="user" label="用户" width="150">
           <template #default="{ row }">
@@ -60,7 +78,7 @@
         </el-table>
       </div>
       
-      <!-- 添加用药记录对话框 -->
+      <!-- 添加单条用药记录对话框 -->
       <el-dialog
         v-model="dialogVisible"
         title="添加用药记录"
@@ -123,6 +141,92 @@
           </span>
         </template>
       </el-dialog>
+
+      <!-- 开具处方对话框（支持多个药品） -->
+      <el-dialog
+        v-model="prescriptionDialogVisible"
+        title="开具处方"
+        :width="prescriptionDialogWidth"
+        @close="resetPrescriptionForm"
+        :close-on-click-modal="false"
+      >
+        <el-form
+          ref="prescriptionFormRef"
+          :model="prescriptionFormData"
+          label-width="100px"
+        >
+          <el-form-item label="处方药品">
+            <div v-for="(item, index) in prescriptionFormData.items" :key="index" class="prescription-item">
+              <el-row :gutter="10" style="margin-bottom: 10px;">
+                <el-col :span="12">
+                  <el-select
+                    v-model="item.drug"
+                    placeholder="请选择药品"
+                    filterable
+                    style="width: 100%"
+                    @change="handlePrescriptionDrugChange(index)"
+                  >
+                    <el-option
+                      v-for="drug in drugList"
+                      :key="drug.id"
+                      :label="`${drug.name} (库存: ${drug.stock})`"
+                      :value="drug.id"
+                      :disabled="drug.stock === 0"
+                    />
+                  </el-select>
+                </el-col>
+                <el-col :span="8">
+                  <el-input-number
+                    v-model="item.quantity"
+                    :min="getMinQuantity(item.drug)"
+                    :max="getMaxQuantity(item.drug)"
+                    placeholder="数量"
+                    style="width: 100%"
+                    :disabled="!item.drug || getDrugStock(item.drug) === 0"
+                  />
+                </el-col>
+                <el-col :span="4">
+                  <el-button
+                    type="danger"
+                    :icon="Delete"
+                    circle
+                    @click="removePrescriptionItem(index)"
+                    :disabled="prescriptionFormData.items.length <= 1"
+                  />
+                </el-col>
+              </el-row>
+              <div v-if="item.drug" class="stock-info">
+                当前库存：{{ getDrugStock(item.drug) }} 件
+              </div>
+            </div>
+            <el-button
+              type="primary"
+              :icon="Plus"
+              plain
+              @click="addPrescriptionItem"
+              style="width: 100%; margin-top: 10px;"
+            >
+              添加药品
+            </el-button>
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input
+              v-model="prescriptionFormData.notes"
+              type="textarea"
+              :rows="3"
+              placeholder="请输入备注（可选）"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="prescriptionDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="handleSubmitPrescription" :loading="prescriptionSubmitting">
+              开具处方
+            </el-button>
+          </span>
+        </template>
+      </el-dialog>
       
       <div class="pagination">
         <el-pagination
@@ -142,7 +246,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus } from '@element-plus/icons-vue'
+import { Search, Plus, Document, Delete } from '@element-plus/icons-vue'
 import { medicationApi, drugApi } from '../api/drugs.js'
 
 const recordList = ref([])
@@ -152,13 +256,26 @@ const searchDrug = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const userRole = ref('patient')
+const currentUserId = ref(null)
 
-// 对话框
+// 单条记录对话框
 const dialogVisible = ref(false)
 const formRef = ref(null)
 const formData = reactive({
   drug: null,
   quantity: 1,
+  notes: ''
+})
+
+// 处方对话框
+const prescriptionDialogVisible = ref(false)
+const prescriptionFormRef = ref(null)
+const prescriptionSubmitting = ref(false)
+const prescriptionFormData = reactive({
+  items: [
+    { drug: null, quantity: 1 }
+  ],
   notes: ''
 })
 
@@ -187,13 +304,16 @@ const minQuantity = computed(() => {
 
 // 响应式对话框宽度
 const dialogWidth = ref('500px')
+const prescriptionDialogWidth = ref('700px')
 
 // 更新对话框宽度
 const updateDialogWidth = () => {
   if (window.innerWidth <= 768) {
     dialogWidth.value = '90%'
+    prescriptionDialogWidth.value = '90%'
   } else {
     dialogWidth.value = '500px'
+    prescriptionDialogWidth.value = '700px'
   }
 }
 
@@ -230,6 +350,11 @@ const fetchRecords = async () => {
     const params = {
       page: currentPage.value,
       page_size: pageSize.value
+    }
+    
+    // 患者只能看到自己的记录
+    if (userRole.value === 'patient' && currentUserId.value) {
+      params.user = currentUserId.value
     }
     
     if (searchDrug.value) {
@@ -273,6 +398,126 @@ const handleAdd = () => {
   
   // 直接打开对话框
   dialogVisible.value = true
+}
+
+const handleAddPrescription = () => {
+  // 重置处方表单数据
+  prescriptionFormData.items = [{ drug: null, quantity: 1 }]
+  prescriptionFormData.notes = ''
+  
+  // 如果药品列表为空，尝试加载
+  if (drugList.value.length === 0) {
+    fetchDrugs().catch(error => {
+      console.error('加载药品列表失败:', error)
+      ElMessage.warning('药品列表加载失败，请刷新页面重试')
+    })
+  }
+  
+  // 打开处方对话框
+  prescriptionDialogVisible.value = true
+}
+
+const addPrescriptionItem = () => {
+  prescriptionFormData.items.push({ drug: null, quantity: 1 })
+}
+
+const removePrescriptionItem = (index) => {
+  if (prescriptionFormData.items.length > 1) {
+    prescriptionFormData.items.splice(index, 1)
+  }
+}
+
+const getDrugStock = (drugId) => {
+  const drug = drugList.value.find(d => d.id === drugId)
+  return drug ? drug.stock : 0
+}
+
+const getMaxQuantity = (drugId) => {
+  const stock = getDrugStock(drugId)
+  return stock > 0 ? stock : 999999  // 如果未选择药品或库存为0，返回一个很大的值
+}
+
+const getMinQuantity = (drugId) => {
+  // 如果已选择药品且库存大于0，最小值为1；否则为0（避免 min > max 错误）
+  if (drugId && getDrugStock(drugId) > 0) {
+    return 1
+  }
+  return 0
+}
+
+const handlePrescriptionDrugChange = (index) => {
+  const item = prescriptionFormData.items[index]
+  if (item.drug) {
+    const stock = getDrugStock(item.drug)
+    if (item.quantity > stock) {
+      item.quantity = stock
+    } else if (item.quantity < 1) {
+      item.quantity = 1
+    }
+  }
+}
+
+const handleSubmitPrescription = async () => {
+  // 验证处方数据
+  const validItems = prescriptionFormData.items.filter(item => item.drug && item.quantity > 0)
+  
+  if (validItems.length === 0) {
+    ElMessage.warning('请至少添加一个药品')
+    return
+  }
+  
+  // 检查库存
+  for (const item of validItems) {
+    const stock = getDrugStock(item.drug)
+    if (item.quantity > stock) {
+      const drug = drugList.value.find(d => d.id === item.drug)
+      ElMessage.error(`${drug?.name || '药品'}库存不足，当前库存：${stock}件`)
+      return
+    }
+  }
+  
+  prescriptionSubmitting.value = true
+  
+  try {
+    // 生成处方号（使用时间戳+随机数）
+    const prescriptionId = `RX${Date.now()}${Math.floor(Math.random() * 1000)}`
+    
+    // 批量创建用药记录（使用相同的prescription_id）
+    const promises = validItems.map(item => 
+      medicationApi.createRecord({
+        drug: item.drug,
+        quantity: item.quantity,
+        prescription_id: prescriptionId,
+        notes: prescriptionFormData.notes || null
+      })
+    )
+    
+    await Promise.all(promises)
+    
+    ElMessage.success(`处方开具成功，共${validItems.length}个药品`)
+    prescriptionDialogVisible.value = false
+    fetchRecords()
+    fetchDrugs() // 刷新药品列表以更新库存
+  } catch (error) {
+    console.error('开具处方失败:', error)
+    const errorMsg = error.response?.data
+    if (typeof errorMsg === 'object') {
+      const firstError = Object.values(errorMsg)[0]
+      ElMessage.error(Array.isArray(firstError) ? firstError[0] : firstError)
+    } else {
+      ElMessage.error(errorMsg || '开具处方失败')
+    }
+  } finally {
+    prescriptionSubmitting.value = false
+  }
+}
+
+const resetPrescriptionForm = () => {
+  if (prescriptionFormRef.value) {
+    prescriptionFormRef.value.resetFields()
+  }
+  prescriptionFormData.items = [{ drug: null, quantity: 1 }]
+  prescriptionFormData.notes = ''
 }
 
 const handleDrugChange = () => {
@@ -380,9 +625,23 @@ const handleResize = () => {
 }
 
 onMounted(() => {
+  // 获取当前用户信息
+  try {
+    const userStr = localStorage.getItem('user')
+    if (userStr) {
+      const user = JSON.parse(userStr)
+      userRole.value = user.role || 'patient'
+      currentUserId.value = user.id
+    }
+  } catch (e) {
+    console.error('解析用户信息失败:', e)
+  }
+  
   updateDialogWidth()
   fetchRecords()
-  fetchDrugs()
+  if (userRole.value !== 'patient') {
+    fetchDrugs() // 只有非患者才需要加载药品列表（用于添加记录）
+  }
   window.addEventListener('resize', handleResize)
 })
 
