@@ -1,52 +1,91 @@
 <template>
   <div class="login-container">
-    <div class="login-card">
-      <div class="login-header">
-        <h2>医院药品管理系统</h2>
-        <p>欢迎登录</p>
+    <!-- 背景图片层 -->
+    <div class="background-layer"></div>
+    
+    <!-- 主内容区域 -->
+    <div class="content-wrapper">
+      <!-- 左侧登录表单 -->
+      <div class="login-card">
+        <div class="login-header">
+          <h1>Log In</h1>
+          <p class="subtitle">医院药品管理系统</p>
+        </div>
+        
+        <el-form
+          ref="loginFormRef"
+          :model="loginForm"
+          :rules="loginRules"
+          class="login-form"
+        >
+          <el-form-item prop="username">
+            <el-input
+              v-model="loginForm.username"
+              placeholder="请输入用户名"
+              size="large"
+              :prefix-icon="User"
+              class="glass-input"
+            />
+          </el-form-item>
+          
+          <el-form-item prop="password">
+            <el-input
+              v-model="loginForm.password"
+              type="password"
+              placeholder="请输入密码"
+              size="large"
+              :prefix-icon="Lock"
+              class="glass-input"
+              @keyup.enter="handleLogin"
+            />
+          </el-form-item>
+          
+          <el-form-item>
+            <el-button
+              type="primary"
+              size="large"
+              :loading="loading"
+              @click="handleLogin"
+              class="login-button"
+            >
+              {{ loading ? '登录中...' : 'Log In' }}
+            </el-button>
+          </el-form-item>
+          
+          <el-form-item>
+            <div class="register-link">
+              <span>还没有账号？</span>
+              <el-link type="primary" @click="goToRegister" class="link-text">立即注册</el-link>
+            </div>
+          </el-form-item>
+          
+          <el-divider>
+            <span class="divider-text">Or</span>
+          </el-divider>
+          
+          <el-form-item>
+            <el-button
+              size="large"
+              class="social-button qq-button"
+              @click="handleSocialLogin('qq')"
+            >
+              <span class="social-icon">QQ</span>
+              Sign Up with QQ
+            </el-button>
+          </el-form-item>
+          
+          <el-form-item>
+            <el-button
+              size="large"
+              class="social-button wechat-button"
+              @click="handleSocialLogin('wechat')"
+            >
+              <span class="social-icon">微信</span>
+              Sign Up with WeChat
+            </el-button>
+          </el-form-item>
+        </el-form>
       </div>
-      <el-form
-        ref="loginFormRef"
-        :model="loginForm"
-        :rules="loginRules"
-        class="login-form"
-      >
-        <el-form-item prop="username">
-          <el-input
-            v-model="loginForm.username"
-            placeholder="请输入用户名"
-            size="large"
-            :prefix-icon="User"
-          />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input
-            v-model="loginForm.password"
-            type="password"
-            placeholder="请输入密码"
-            size="large"
-            :prefix-icon="Lock"
-            @keyup.enter="handleLogin"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            size="large"
-            :loading="loading"
-            @click="handleLogin"
-            class="login-button"
-          >
-            {{ loading ? '登录中...' : '登录' }}
-          </el-button>
-        </el-form-item>
-        <el-form-item>
-          <div class="register-link">
-            <span>还没有账号？</span>
-            <el-link type="primary" @click="goToRegister">立即注册</el-link>
-          </div>
-        </el-form-item>
-      </el-form>
     </div>
   </div>
 </template>
@@ -74,9 +113,10 @@ const loginRules = {
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' }
-    // 登录时不需要验证密码长度，只需要验证密码是否正确
   ]
 }
+
+
 
 const handleLogin = async () => {
   if (!loginFormRef.value) return
@@ -88,20 +128,18 @@ const handleLogin = async () => {
         const response = await authApi.login(loginForm.username, loginForm.password)
         
         if (response.data.token) {
-          // 保存 token
           localStorage.setItem('token', response.data.token)
           localStorage.setItem('user', JSON.stringify(response.data.user))
           
           ElMessage.success('登录成功')
           
-          // 根据角色跳转到不同页面
           const userRole = response.data.user.role || 'patient'
           if (userRole === 'admin') {
-            router.push('/layout/dashboard') // 管理员看大屏
+            router.push('/layout/dashboard')
           } else if (userRole === 'doctor') {
-            router.push('/layout/drugs') // 医生看药品管理
+            router.push('/layout/drugs')
           } else {
-            router.push('/layout/medication-records') // 患者看用药记录
+            router.push('/layout/medication-records')
           }
         } else {
           ElMessage.error('登录失败：未收到 token')
@@ -116,6 +154,10 @@ const handleLogin = async () => {
   })
 }
 
+const handleSocialLogin = (type) => {
+  ElMessage.info(`${type === 'qq' ? 'QQ' : '微信'}登录功能开发中...`)
+}
+
 const goToRegister = () => {
   router.push('/register')
 }
@@ -125,74 +167,283 @@ const goToRegister = () => {
 .login-container {
   width: 100%;
   min-height: 100vh;
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
-  box-sizing: border-box;
-}
-
-.login-card {
-  width: 100%;
-  max-width: 400px;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
   padding: 40px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
-@media (max-width: 480px) {
-  .login-card {
-    padding: 30px 20px;
+/* 背景层 - 优化的渐变配色 */
+.background-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #1e3c72, #2a5298, #526d82);
+  background-size: 400% 400%;
+  animation: gradientMove 20s ease infinite;
+  z-index: 0;
+}
+
+@keyframes gradientMove {
+  0% {
+    background-position: 0% 50%;
   }
-  
-  .login-header h2 {
-    font-size: 24px;
+  50% {
+    background-position: 100% 50%;
   }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* 主内容包装器 */
+.content-wrapper {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 500px;
+}
+
+/* 登录卡片 - 增强的玻璃态效果 */
+.login-card {
+  width: 100%;
+  max-width: 500px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  padding: 50px 40px;
+  box-sizing: border-box;
 }
 
 .login-header {
-  text-align: center;
   margin-bottom: 40px;
 }
 
-.login-header h2 {
-  color: #333;
-  font-size: 28px;
-  font-weight: bold;
-  margin-bottom: 10px;
+.login-header h1 {
+  color: #1e3c72;
+  font-size: 42px;
+  font-weight: 700;
+  margin: 0 0 10px 0;
+  text-shadow: 0 2px 10px rgba(255, 255, 255, 0.3);
 }
 
-.login-header p {
-  color: #666;
-  font-size: 14px;
+.subtitle {
+  color: #526d82;
+  font-size: 16px;
+  margin: 0;
 }
 
 .login-form {
   margin-top: 30px;
 }
 
-.login-button {
-  width: 100%;
-  height: 45px;
-  font-size: 16px;
-  font-weight: 500;
+/* 现代风格的玻璃态输入框 */
+:deep(.glass-input .el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.4) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: none !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  transition: all 0.3s ease;
+  padding: 0;
 }
 
+:deep(.glass-input .el-input__wrapper:hover) {
+  background: rgba(255, 255, 255, 0.5) !important;
+}
+
+:deep(.glass-input .el-input__wrapper.is-focus) {
+  background: rgba(255, 255, 255, 0.5) !important;
+  box-shadow: none !important;
+}
+
+:deep(.glass-input .el-input__wrapper.is-focus:hover) {
+  background: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* 确保输入框在所有状态下都保持玻璃态效果 */
+:deep(.glass-input .el-input__wrapper.is-filled) {
+  background: rgba(255, 255, 255, 0.4) !important;
+}
+
+:deep(.glass-input .el-input__wrapper.is-filled:hover) {
+  background: rgba(255, 255, 255, 0.5) !important;
+}
+
+:deep(.glass-input input) {
+  color: #333 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+:deep(.glass-input input::placeholder) {
+  color: #999 !important;
+}
+
+:deep(.glass-input .el-input__prefix) {
+  color: #666 !important;
+}
+
+/* 移除Element Plus默认的白色背景和边框 */
+:deep(.glass-input .el-input__inner) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* 登录按钮 */
+.login-button {
+  width: 100%;
+  height: 50px;
+  font-size: 16px;
+  font-weight: 600;
+  background: #000;
+  border: none;
+  border-radius: 12px;
+  color: #fff;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.login-button:hover {
+  background: #333;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.login-button:active {
+  transform: translateY(0);
+}
+
+/* 注册链接 */
 .register-link {
   width: 100%;
   text-align: center;
-  color: #666;
+  color: #526d82;
   font-size: 14px;
 }
 
-.register-link span {
-  margin-right: 5px;
+.link-text {
+  color: #1e3c72;
+  font-weight: 600;
+  text-decoration: underline;
 }
 
-:deep(.el-input__wrapper) {
-  border-radius: 8px;
+/* 分隔线 */
+:deep(.el-divider) {
+  border-color: rgba(30, 60, 114, 0.2);
+  margin: 30px 0;
+}
+
+/* 修复 Element Plus 分隔线文字背景色问题 */
+:deep(.el-divider__text) {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+:deep(.el-divider__text.is-left),
+:deep(.el-divider__text.is-center),
+:deep(.el-divider__text.is-right) {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+.divider-text {
+  color: #526d82;
+  font-size: 14px;
+  padding: 0 20px;
+  background: transparent !important;
+  background-color: transparent !important;
+  position: relative;
+  top: -4px;
+  display: inline-block;
+}
+
+/* 社交登录按钮 */
+.social-button {
+  width: 100%;
+  height: 50px;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: 12px;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.qq-button {
+  background: #12b7f5;
+  color: #fff;
+}
+
+.qq-button:hover {
+  background: #0ea5d4;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(18, 183, 245, 0.3);
+}
+
+.wechat-button {
+  background: #07c160;
+  color: #fff;
+  margin-top: 12px;
+}
+
+.wechat-button:hover {
+  background: #06ad56;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(7, 193, 96, 0.3);
+}
+
+.social-icon {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .login-container {
+    padding: 20px;
+  }
+  
+  .login-card {
+    padding: 30px 25px;
+  }
+  
+  .login-header h1 {
+    font-size: 32px;
+  }
+}
+
+@media (max-width: 768px) {
+  .login-container {
+    padding: 20px;
+  }
+  
+  .login-card,
+  .announcement-panel {
+    padding: 30px 25px;
+  }
+  
+  .login-header h1 {
+    font-size: 32px;
+  }
 }
 </style>

@@ -616,24 +616,42 @@ const loadTop5Chart = async () => {
         }
       },
       grid: {
-        left: '10%',
-        right: '10%',
-        bottom: '30%',
+        left: '5%',
+        right: '5%',
+        bottom: '35%',
         top: '15%',
-        containLabel: false
+        containLabel: true
       },
       xAxis: {
         type: 'category',
         data: data.map(item => `${item.drug1}\n+ ${item.drug2}`),
         axisLabel: { 
-          rotate: 0,
+          rotate: -45, // 旋转45度，避免文字重叠
           interval: 0,
-          fontSize: 11,
-          lineHeight: 16,
+          fontSize: 10,
+          lineHeight: 14,
+          margin: 10, // 增加标签与轴的距离
           formatter: (value) => {
-            // 换行显示，避免文字重叠
+            // 如果文字太长，截断并显示省略号
+            const lines = value.split('\n')
+            if (lines.length > 0) {
+              const maxLength = 8 // 每行最大字符数
+              return lines.map(line => {
+                if (line.length > maxLength) {
+                  return line.substring(0, maxLength) + '...'
+                }
+                return line
+              }).join('\n')
+            }
             return value
+          },
+          textStyle: {
+            color: '#333',
+            fontSize: 10
           }
+        },
+        axisTick: {
+          alignWithLabel: true // 刻度线与标签对齐
         }
       },
       yAxis: {
@@ -664,9 +682,64 @@ const loadTop5Chart = async () => {
     }
     
     top5Chart.setOption(option)
-    window.addEventListener('resize', () => {
-      top5Chart?.resize()
-    })
+    
+    // 响应式调整：根据窗口宽度动态调整配置
+    const handleResize = () => {
+      if (!top5Chart) return
+      
+      const width = window.innerWidth
+      let updateOption = {}
+      
+      // 根据屏幕宽度调整标签旋转角度和字体大小
+      if (width < 768) {
+        // 移动端：旋转90度，更小的字体，更多底部空间
+        updateOption = {
+          xAxis: [{
+            axisLabel: {
+              rotate: -90,
+              fontSize: 9
+            }
+          }],
+          grid: [{
+            bottom: '40%'
+          }]
+        }
+      } else if (width < 1024) {
+        // 平板：旋转45度
+        updateOption = {
+          xAxis: [{
+            axisLabel: {
+              rotate: -45,
+              fontSize: 10
+            }
+          }],
+          grid: [{
+            bottom: '35%'
+          }]
+        }
+      } else {
+        // 桌面：旋转45度
+        updateOption = {
+          xAxis: [{
+            axisLabel: {
+              rotate: -45,
+              fontSize: 10
+            }
+          }],
+          grid: [{
+            bottom: '30%'
+          }]
+        }
+      }
+      
+      top5Chart.setOption(updateOption)
+      top5Chart.resize()
+    }
+    
+    window.addEventListener('resize', handleResize)
+    
+    // 初始化时也检查一次
+    setTimeout(handleResize, 100)
   } catch (error) {
     console.error('加载Top5关联数据失败:', error)
     ElMessage.error('加载Top5关联数据失败')

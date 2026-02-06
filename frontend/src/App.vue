@@ -28,7 +28,7 @@
   
   .el-table .el-table__cell {
     padding: 8px 4px;
-  }
+}
   
   .el-button {
     padding: 5px 10px;
@@ -38,7 +38,7 @@
   .el-dialog {
     width: 90% !important;
     margin: 0 auto;
-  }
+}
 }
 
 @media (max-width: 480px) {
