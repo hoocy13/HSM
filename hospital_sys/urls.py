@@ -18,15 +18,25 @@ from django.contrib import admin
 from django.urls import path, include
 from django.http import JsonResponse
 from rest_framework.routers import DefaultRouter
-from drugs.views import DrugViewSet, MedicationRecordViewSet, AuthViewSet, UserViewSet, DashboardViewSet
+from drugs.views import (
+    DrugViewSet,
+    MedicationRecordViewSet,
+    InventoryAdjustmentViewSet,
+    OperationLogViewSet,
+    AuthViewSet,
+    UserViewSet,
+    DashboardViewSet,
+)
 
 # 创建路由器并注册视图集
 router = DefaultRouter()
 router.register(r'drugs', DrugViewSet, basename='drug')
 router.register(r'medication-records', MedicationRecordViewSet, basename='medication-record')
+router.register(r'inventory-adjustments', InventoryAdjustmentViewSet, basename='inventory-adjustment')
 router.register(r'auth', AuthViewSet, basename='auth')
 router.register(r'users', UserViewSet, basename='user')
 router.register(r'dashboard', DashboardViewSet, basename='dashboard')
+router.register(r'operation-logs', OperationLogViewSet, basename='operation-log')
 
 # 根路径视图
 def api_root(request):
@@ -44,6 +54,13 @@ def api_root(request):
             'users': '/api/users/',
             'drugs_warnings': '/api/drugs/warnings/',
             'drugs_stock_in': '/api/drugs/{id}/stock-in/',
+            'dashboard': '/api/dashboard/',
+            'dashboard_trends': '/api/dashboard/trends/',
+            'inventory_adjustments': '/api/inventory-adjustments/',
+            'medication_cancel': '/api/medication-records/{id}/cancel/',
+            'operation_logs': '/api/operation-logs/',
+            'dashboard_recommendations': '/api/dashboard/recommendations/',
+            'drug_stock_trend': '/api/drugs/{id}/stock-trend/',
         }
     })
 

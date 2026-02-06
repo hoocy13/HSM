@@ -29,14 +29,26 @@
           stripe
         >
         <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="username" label="用户名" />
+        <el-table-column label="头像" width="72" align="center">
+          <template #default="{ row }">
+            <el-avatar v-if="row.avatar" :src="row.avatar" :size="36" />
+            <el-avatar v-else :size="36">{{ (row.first_name || row.username || '?').slice(0, 1) }}</el-avatar>
+          </template>
+        </el-table-column>
+        <el-table-column label="姓名" min-width="100">
+          <template #default="{ row }">
+            {{ [row.first_name, row.last_name].filter(Boolean).join(' ') || row.username }}
+          </template>
+        </el-table-column>
         <el-table-column prop="email" label="邮箱" />
-        <el-table-column prop="first_name" label="名" />
-        <el-table-column prop="last_name" label="姓" />
+        <el-table-column prop="department" label="科室" width="120" />
         <el-table-column prop="role" label="角色" width="120" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.role === 'admin' ? 'danger' : row.role === 'doctor' ? 'warning' : 'info'" size="small">
-              {{ row.role === 'admin' ? '管理员' : row.role === 'doctor' ? '医生' : '患者' }}
+            <el-tag
+              :type="row.role === 'admin' ? 'danger' : row.role === 'doctor' ? 'warning' : row.role === 'pharmacist' ? 'success' : 'info'"
+              size="small"
+            >
+              {{ roleLabel(row.role) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -106,6 +118,12 @@
             placeholder="请输入姓"
           />
         </el-form-item>
+        <el-form-item label="头像 URL" prop="avatar">
+          <el-input v-model="formData.avatar" placeholder="可选，图片地址" />
+        </el-form-item>
+        <el-form-item label="科室" prop="department">
+          <el-input v-model="formData.department" placeholder="科室" />
+        </el-form-item>
         <el-form-item label="角色" prop="role">
           <el-select
             v-model="formData.role"
@@ -114,6 +132,7 @@
           >
             <el-option label="管理员" value="admin" />
             <el-option label="医生" value="doctor" />
+            <el-option label="药剂师" value="pharmacist" />
             <el-option label="患者" value="patient" />
           </el-select>
         </el-form-item>
@@ -151,8 +170,18 @@ const formData = reactive({
   email: '',
   first_name: '',
   last_name: '',
+  avatar: '',
+  department: '',
   role: 'patient'
 })
+
+const roleLabel = (r) =>
+  ({
+    admin: '管理员',
+    doctor: '医生',
+    pharmacist: '药剂师',
+    patient: '患者'
+  }[r] || r)
 
 // 响应式对话框宽度
 const dialogWidth = computed(() => {
@@ -226,6 +255,8 @@ const handleEdit = (row) => {
   formData.email = row.email || ''
   formData.first_name = row.first_name || ''
   formData.last_name = row.last_name || ''
+  formData.avatar = row.avatar || ''
+  formData.department = row.department || ''
   formData.role = row.role || 'patient'
   dialogVisible.value = true
 }
@@ -243,7 +274,9 @@ const handleSubmit = async () => {
             email: formData.email,
             first_name: formData.first_name,
             last_name: formData.last_name,
-            role: formData.role
+            role_write: formData.role,
+            avatar_write: formData.avatar,
+            department_write: formData.department
           })
           console.log('更新响应数据:', response.data)
           ElMessage.success('更新成功')
@@ -285,6 +318,8 @@ const resetForm = () => {
   formData.email = ''
   formData.first_name = ''
   formData.last_name = ''
+  formData.avatar = ''
+  formData.department = ''
   formData.role = 'patient'
 }
 

@@ -28,6 +28,13 @@
           <el-icon><Plus /></el-icon>
           添加药品
         </el-button>
+        <el-button
+          v-if="userRole === 'admin' || userRole === 'pharmacist'"
+          type="warning"
+          @click="openInventoryDialog"
+        >
+          库存盘点
+        </el-button>
       </div>
       
       <!-- 药品表格 -->
@@ -68,8 +75,9 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right" v-if="userRole !== 'patient'">
+        <el-table-column label="操作" width="360" fixed="right" v-if="userRole !== 'patient'">
           <template #default="{ row }">
+            <el-button type="info" size="small" @click="openStockTrend(row)">库存轨迹</el-button>
             <el-button
               type="success"
               size="small"
@@ -158,6 +166,15 @@
             style="width: 100%"
           />
         </el-form-item>
+        <el-form-item label="安全库存下限" prop="min_stock">
+          <el-input-number v-model="formData.min_stock" :min="0" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="效期预警(天)" prop="expiry_warning_days">
+          <el-input-number v-model="formData.expiry_warning_days" :min="1" :max="365" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="所属科室">
+          <el-input v-model="formData.department" placeholder="空=全院共用" clearable />
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -201,6 +218,42 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 库存盘点 / 损溢 -->
+    <el-dialog
+      v-model="inventoryDialogVisible"
+      title="库存盘点 / 损溢录入"
+      :width="dialogWidth"
+      @open="ensureDrugOptions"
+    >
+      <el-form ref="invFormRef" :model="invForm" :rules="invRules" label-width="100px">
+        <el-form-item label="药品" prop="drug">
+          <el-select v-model="invForm.drug" placeholder="请选择药品" filterable style="width: 100%">
+            <el-option
+              v-for="d in allDrugs"
+              :key="d.id"
+              :label="`${d.name} (库存 ${d.stock})`"
+              :value="d.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="调整数量" prop="quantity_change">
+          <el-input-number v-model="invForm.quantity_change" style="width: 100%" />
+          <div class="hint">正数增加库存，负数减少（如报损）。</div>
+        </el-form-item>
+        <el-form-item label="原因" prop="reason">
+          <el-input v-model="invForm.reason" type="textarea" :rows="2" placeholder="必填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="inventoryDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="invSubmitting" @click="submitInventory">提交</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="stockTrendVisible" title="库存变化轨迹" width="720px" @opened="renderTrendChart">
+      <div ref="trendChartRef" style="width: 100%; height: 380px;"></div>
+    </el-dialog>
     
     <!-- 预警对话框 -->
     <el-dialog
@@ -240,7 +293,8 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Warning } from '@element-plus/icons-vue'
-import { drugApi } from '../api/drugs.js'
+import * as echarts from 'echarts'
+import { drugApi, inventoryApi } from '../api/drugs.js'
 
 // 数据
 const drugList = ref([])
@@ -275,6 +329,25 @@ const warningDialogWidth = computed(() => {
 // 对话框
 const dialogVisible = ref(false)
 const stockInDialogVisible = ref(false)
+const inventoryDialogVisible = ref(false)
+const invFormRef = ref(null)
+const invSubmitting = ref(false)
+const allDrugs = ref([])
+const invForm = reactive({
+  drug: null,
+  quantity_change: 0,
+  reason: ''
+})
+const invRules = {
+  drug: [{ required: true, message: '请选择药品', trigger: 'change' }],
+  quantity_change: [{ required: true, message: '请输入调整数量', trigger: 'blur' }],
+  reason: [{ required: true, message: '请填写原因', trigger: 'blur' }]
+}
+const stockTrendVisible = ref(false)
+const trendChartRef = ref(null)
+const trendDrugId = ref(null)
+let trendChart = null
+
 const warningsDialogVisible = ref(false)
 const dialogTitle = ref('添加药品')
 const formRef = ref(null)
@@ -284,7 +357,10 @@ const formData = reactive({
   name: '',
   stock: 0,
   cost_price: 0,
-  expiry_date: null
+  expiry_date: null,
+  min_stock: 10,
+  expiry_warning_days: 30,
+  department: ''
 })
 
 const stockInForm = reactive({
@@ -368,6 +444,37 @@ const handlePageChange = (page) => {
 }
 
 // 添加药品
+const openStockTrend = (row) => {
+  trendDrugId.value = row.id
+  stockTrendVisible.value = true
+}
+
+const renderTrendChart = async () => {
+  if (!trendChartRef.value || !trendDrugId.value) return
+  try {
+    const { data } = await drugApi.getStockTrend(trendDrugId.value)
+    const hist = data.history || []
+    if (trendChart) {
+      trendChart.dispose()
+      trendChart = null
+    }
+    trendChart = echarts.init(trendChartRef.value)
+    trendChart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['在库数量', '本次变动'] },
+      xAxis: { type: 'category', data: hist.map((h) => h.date), axisLabel: { rotate: 35 } },
+      yAxis: { type: 'value', name: '数量' },
+      series: [
+        { name: '在库数量', type: 'line', smooth: true, data: hist.map((h) => h.stock) },
+        { name: '本次变动', type: 'bar', data: hist.map((h) => h.change) }
+      ]
+    })
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载库存轨迹失败')
+  }
+}
+
 const handleAdd = () => {
   dialogTitle.value = '添加药品'
   formData.id = null
@@ -375,6 +482,9 @@ const handleAdd = () => {
   formData.stock = 0
   formData.cost_price = 0
   formData.expiry_date = null
+  formData.min_stock = 10
+  formData.expiry_warning_days = 30
+  formData.department = ''
   dialogVisible.value = true
 }
 
@@ -386,6 +496,9 @@ const handleEdit = (row) => {
   formData.stock = row.stock
   formData.cost_price = row.cost_price || 0
   formData.expiry_date = row.expiry_date
+  formData.min_stock = row.min_stock ?? 10
+  formData.expiry_warning_days = row.expiry_warning_days ?? 30
+  formData.department = row.department || ''
   dialogVisible.value = true
 }
 
@@ -441,6 +554,48 @@ const handleStockInSubmit = async () => {
   })
 }
 
+const ensureDrugOptions = async () => {
+  if (allDrugs.value.length) return
+  try {
+    const res = await drugApi.getDrugs({ page_size: 2000 })
+    allDrugs.value = res.data.results || []
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const openInventoryDialog = async () => {
+  invForm.drug = null
+  invForm.quantity_change = 0
+  invForm.reason = ''
+  await ensureDrugOptions()
+  inventoryDialogVisible.value = true
+}
+
+const submitInventory = async () => {
+  if (!invFormRef.value) return
+  await invFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    invSubmitting.value = true
+    try {
+      await inventoryApi.create({
+        drug: invForm.drug,
+        quantity_change: invForm.quantity_change,
+        reason: invForm.reason
+      })
+      ElMessage.success('已提交')
+      inventoryDialogVisible.value = false
+      fetchDrugs()
+    } catch (e) {
+      const d = e.response?.data
+      const msg = typeof d === 'object' ? Object.values(d).flat()[0] : d
+      ElMessage.error(msg || '提交失败')
+    } finally {
+      invSubmitting.value = false
+    }
+  })
+}
+
 // 显示预警
 const showWarnings = async () => {
   await fetchWarnings()
@@ -458,7 +613,10 @@ const handleSubmit = async () => {
           name: formData.name,
           stock: formData.stock,
           cost_price: formData.cost_price,
-          expiry_date: formData.expiry_date
+          expiry_date: formData.expiry_date,
+          min_stock: formData.min_stock,
+          expiry_warning_days: formData.expiry_warning_days,
+          department: formData.department || ''
         }
         
         if (formData.id) {
@@ -488,6 +646,9 @@ const resetForm = () => {
   formData.stock = 0
   formData.cost_price = 0
   formData.expiry_date = null
+  formData.min_stock = 10
+  formData.expiry_warning_days = 30
+  formData.department = ''
 }
 
 // 格式化日期
@@ -566,6 +727,12 @@ onUnmounted(() => {
   align-items: center;
   font-size: 18px;
   font-weight: bold;
+}
+
+.hint {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 
 .toolbar {

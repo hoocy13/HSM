@@ -6,13 +6,16 @@ from rest_framework.views import APIView
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Sum, Count, Q, F
 from django.db.models.functions import TruncDate
 from datetime import date, timedelta, datetime
 from collections import defaultdict
 from itertools import combinations
 import math
-from .models import Drug, MedicationRecord
+from .models import Drug, MedicationRecord, InventoryAdjustment, OperationLog, Alert
+from .permissions import _role, IsAdminOrPharmacist, IsAdmin
+from .dashboard_service import build_home_payload, build_trends_payload, build_recommendations_payload, _scope_med_qs
 
 # 临床建议字典（药品联用注意事项）
 CLINICAL_ADVICE = {
@@ -29,12 +32,36 @@ def get_clinical_advice(drug1_category, drug2_category):
     key2 = (drug2_category, drug1_category)
     return CLINICAL_ADVICE.get(key1) or CLINICAL_ADVICE.get(key2) or '请咨询医生确认联用安全性'
 from .serializers import (
-    DrugSerializer, 
+    DrugSerializer,
     DrugStockUpdateSerializer,
     MedicationRecordSerializer,
     UserSerializer,
-    UserRegisterSerializer
+    UserRegisterSerializer,
+    InventoryAdjustmentCreateSerializer,
+    InventoryAdjustmentSerializer,
+    OperationLogSerializer,
 )
+
+
+def active_medication_qs():
+    return MedicationRecord.objects.filter(status='ACTIVE')
+
+
+def scoped_active_med(request):
+    return _scope_med_qs(active_medication_qs(), request)
+
+
+def dashboard_scoped_drugs(request):
+    qs = Drug.objects.all()
+    r = _role(request.user) if request.user.is_authenticated else None
+    if r == 'pharmacist':
+        try:
+            dept = (request.user.profile.department or '').strip()
+        except Exception:
+            dept = ''
+        if dept:
+            qs = qs.filter(Q(department=dept) | Q(department=''))
+    return qs
 
 
 class DrugViewSet(viewsets.ModelViewSet):
@@ -60,24 +87,89 @@ class DrugViewSet(viewsets.ModelViewSet):
         name = self.request.query_params.get('name', None)
         if name is not None:
             queryset = queryset.filter(name__icontains=name)
+        r = _role(self.request.user) if self.request.user.is_authenticated else None
+        if r == 'pharmacist':
+            try:
+                dept = (self.request.user.profile.department or '').strip()
+            except Exception:
+                dept = ''
+            if dept:
+                queryset = queryset.filter(Q(department=dept) | Q(department=''))
         return queryset
+
+    def perform_update(self, serializer):
+        from .services.log_service import log_operation
+        from .services.alert_service import maybe_alerts_for_drug
+
+        with transaction.atomic():
+            d = serializer.save()
+            if self.request.user.is_authenticated:
+                log_operation(
+                    user=self.request.user,
+                    action_type='UPDATE_DRUG',
+                    target_type='drug',
+                    target_id=d.id,
+                    detail=f'更新药品 {d.name}',
+                )
+            d2 = Drug.objects.select_for_update().get(pk=d.pk)
+            maybe_alerts_for_drug(d2, d2.department or '')
+
+    @action(detail=True, methods=['get'], url_path='stock-trend')
+    def stock_trend(self, request, pk=None):
+        from .services.stock_trend_service import build_stock_trend
+
+        return Response(build_stock_trend(int(pk)))
     
-    @action(detail=True, methods=['post'], url_path='stock-in')
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='stock-in',
+        permission_classes=[IsAuthenticated, IsAdminOrPharmacist],
+    )
     def stock_in(self, request, pk=None):
-        """药品入库功能"""
+        """药品入库功能（记入 InventoryAdjustment 流水）"""
         drug = self.get_object()
         serializer = DrugStockUpdateSerializer(data=request.data)
-        
+
         if serializer.is_valid():
+            from .services.log_service import log_operation
+            from .services.alert_service import maybe_alerts_for_drug
+
             quantity = serializer.validated_data['quantity']
-            drug.stock += quantity
-            drug.save()
-            
+            with transaction.atomic():
+                d = Drug.objects.select_for_update().get(pk=drug.pk)
+                d.stock += quantity
+                d.save()
+                InventoryAdjustment.objects.create(
+                    drug=d,
+                    quantity_change=quantity,
+                    reason='入库',
+                    created_by=request.user,
+                )
+                log_operation(
+                    user=request.user,
+                    action_type='STOCK_IN',
+                    target_type='drug',
+                    target_id=d.id,
+                    detail=f'入库 {quantity} 件',
+                )
+                d = Drug.objects.select_for_update().get(pk=d.pk)
+                maybe_alerts_for_drug(d, d.department or '')
+                Alert.objects.create(
+                    type='ARRIVAL',
+                    level='info',
+                    content=f'{d.name} 入库 {quantity} 件',
+                    target_role='doctor',
+                    department=d.department or '',
+                    target_type='drug',
+                    target_id=d.id,
+                )
+            d.refresh_from_db()
             return Response({
                 'message': f'成功入库 {quantity} 件',
-                'drug': DrugSerializer(drug).data
+                'drug': DrugSerializer(d).data
             }, status=status.HTTP_200_OK)
-        
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['get'], url_path='warnings')
@@ -91,7 +183,7 @@ class DrugViewSet(viewsets.ModelViewSet):
         thirty_days_ago = timezone.now() - timedelta(days=30)
         
         # 获取所有药品的消耗统计
-        drug_consumption = MedicationRecord.objects.filter(
+        drug_consumption = scoped_active_med(request).filter(
             record_time__gte=thirty_days_ago
         ).values('drug').annotate(
             total_consumption=Sum('quantity')
@@ -101,14 +193,15 @@ class DrugViewSet(viewsets.ModelViewSet):
         
         # 计算每日消耗量（用于计算标准差）
         drug_consumption_daily = defaultdict(list)
-        for record in MedicationRecord.objects.filter(record_time__gte=thirty_days_ago):
+        for record in scoped_active_med(request).filter(record_time__gte=thirty_days_ago):
             drug_consumption_daily[record.drug_id].append(record.quantity)
         
         # 计算每个药品的动态阈值（使用时间序列分析公式）
         warning_drugs_list = []
         procurement_list = []  # 智能采购清单
         
-        for drug in Drug.objects.all():
+        drug_qs = self.get_queryset()
+        for drug in Drug.objects.filter(pk__in=drug_qs.values_list('id', flat=True)):
             is_warning = False
             warning_reasons = []
             suggested_purchase = 0
@@ -187,58 +280,194 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
     """用药记录视图集"""
     queryset = MedicationRecord.objects.all()
     serializer_class = MedicationRecordSerializer
-    permission_classes = [AllowAny]  # 暂时允许所有用户
-    
+    permission_classes = [AllowAny]
+
     def get_queryset(self):
-        """获取查询集，支持按用户和药品筛选"""
         queryset = MedicationRecord.objects.all()
         user_id = self.request.query_params.get('user', None)
         drug_id = self.request.query_params.get('drug', None)
-        
+
+        r = _role(self.request.user) if self.request.user.is_authenticated else None
+        if r in ('doctor', 'pharmacist'):
+            try:
+                dept = (self.request.user.profile.department or '').strip()
+            except Exception:
+                dept = ''
+            if dept:
+                queryset = queryset.filter(department=dept)
+
         if user_id:
             queryset = queryset.filter(user_id=user_id)
         if drug_id:
             queryset = queryset.filter(drug_id=drug_id)
-        
+
         return queryset
-    
+
     def perform_create(self, serializer):
-        """创建用药记录时自动扣除库存（效期熔断机制）"""
+        """创建用药记录时自动扣除库存（事务 + 开具医师 + 审计）"""
+        from .services.log_service import log_operation
+        from .services.alert_service import maybe_alerts_for_drug, maybe_disease_spike_alert
+
         drug = serializer.validated_data['drug']
         quantity = serializer.validated_data['quantity']
-        
-        # 效期熔断机制：检查药品是否已过期
+        disease_name = (serializer.validated_data.get('disease_name') or '').strip()
+
         today = date.today()
         if drug.expiry_date and drug.expiry_date < today:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({
                 'drug': f'该药品已过期（有效期：{drug.expiry_date}），无法出库'
             })
-        
-        # 检查库存
-        if drug.stock < quantity:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({
-                'quantity': f'库存不足，当前库存：{drug.stock}件'
-            })
-        
-        # 如果没有指定用户，使用当前登录用户
-        if not serializer.validated_data.get('user'):
-            if self.request.user.is_authenticated:
-                serializer.save(user=self.request.user)
-            else:
-                # 如果没有登录，使用默认用户（开发环境）
-                default_user = User.objects.first()
-                if default_user:
-                    serializer.save(user=default_user)
+
+        role = _role(self.request.user) if self.request.user.is_authenticated else None
+        prescribed_by = self.request.user if role in ('doctor', 'admin') else None
+
+        dept = ''
+        if prescribed_by:
+            try:
+                dept = (prescribed_by.profile.department or '').strip()
+            except Exception:
+                dept = ''
+        elif self.request.user.is_authenticated:
+            try:
+                dept = (self.request.user.profile.department or '').strip()
+            except Exception:
+                dept = ''
+
+        with transaction.atomic():
+            d = Drug.objects.select_for_update().get(pk=drug.pk)
+            if d.expiry_date and d.expiry_date < today:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    'drug': f'该药品已过期（有效期：{d.expiry_date}），无法出库'
+                })
+            if d.stock < quantity:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    'quantity': f'库存不足，当前库存：{d.stock}件'
+                })
+
+            extra = {'department': dept, 'disease_name': disease_name}
+            if not serializer.validated_data.get('user'):
+                if self.request.user.is_authenticated:
+                    extra['user'] = self.request.user
                 else:
-                    serializer.save()
-        else:
-            serializer.save()
-        
-        # 扣除库存
-        drug.stock -= quantity
-        drug.save()
+                    default_user = User.objects.first()
+                    if default_user:
+                        extra['user'] = default_user
+            if prescribed_by is not None:
+                extra['prescribed_by'] = prescribed_by
+
+            instance = serializer.save(**extra)
+            d.stock -= quantity
+            d.save()
+            log_operation(
+                user=self.request.user if self.request.user.is_authenticated else None,
+                action_type='CREATE_PRESCRIPTION',
+                target_type='prescription',
+                target_id=instance.id,
+                detail=f'处方 {instance.prescription_id or "-"} 药品 {d.name} 数量 {quantity} 疾病:{disease_name or "-"}',
+            )
+            d2 = Drug.objects.select_for_update().get(pk=d.pk)
+            maybe_alerts_for_drug(d2, dept or d2.department or '')
+
+        maybe_disease_spike_alert(disease_name, dept)
+
+    @action(detail=True, methods=['post'], url_path='cancel', permission_classes=[IsAuthenticated])
+    def cancel(self, request, pk=None):
+        """撤销处方：同一处方号下所有有效记录一并回滚库存"""
+        record = self.get_object()
+        if record.status != 'ACTIVE':
+            return Response({'error': '该记录已作废'}, status=status.HTTP_400_BAD_REQUEST)
+
+        role = _role(request.user)
+        can = role == 'admin'
+        if not can and record.prescribed_by_id and record.prescribed_by_id == request.user.id:
+            can = True
+        if not can:
+            return Response({'error': '无权撤销该处方'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .services.log_service import log_operation
+
+        with transaction.atomic():
+            if record.prescription_id:
+                qs = MedicationRecord.objects.select_for_update().filter(
+                    prescription_id=record.prescription_id,
+                    status='ACTIVE',
+                )
+            else:
+                qs = MedicationRecord.objects.select_for_update().filter(pk=record.pk, status='ACTIVE')
+
+            for r in qs:
+                Drug.objects.filter(pk=r.drug_id).update(stock=F('stock') + r.quantity)
+            now = timezone.now()
+            qs.update(status='CANCELLED', cancelled_at=now)
+            log_operation(
+                user=request.user,
+                action_type='CANCEL_PRESCRIPTION',
+                target_type='prescription',
+                target_id=record.id,
+                detail=f'撤销处方 {record.prescription_id or record.id}',
+            )
+
+        return Response({'message': '处方已撤销', 'prescription_id': record.prescription_id or None})
+
+
+class InventoryAdjustmentViewSet(viewsets.ModelViewSet):
+    """库存盘点 / 损溢录入"""
+    queryset = InventoryAdjustment.objects.select_related('drug', 'created_by').order_by('-created_at')
+    serializer_class = InventoryAdjustmentSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.query_params.get('only_in') == '1':
+            qs = qs.filter(quantity_change__gt=0)
+        r = _role(self.request.user) if self.request.user.is_authenticated else None
+        if r == 'pharmacist':
+            try:
+                dept = (self.request.user.profile.department or '').strip()
+            except Exception:
+                dept = ''
+            if dept:
+                qs = qs.filter(Q(drug__department=dept) | Q(drug__department=''))
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return InventoryAdjustmentCreateSerializer
+        return InventoryAdjustmentSerializer
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsAuthenticated(), IsAdminOrPharmacist()]
+        return [AllowAny()]
+
+    def perform_create(self, serializer):
+        from .services.log_service import log_operation
+        from .services.alert_service import maybe_alerts_for_drug
+
+        drug = serializer.validated_data['drug']
+        qty = serializer.validated_data['quantity_change']
+        reason = serializer.validated_data.get('reason', '')
+        from rest_framework.exceptions import ValidationError
+
+        with transaction.atomic():
+            d = Drug.objects.select_for_update().get(pk=drug.pk)
+            if d.stock + qty < 0:
+                raise ValidationError({'quantity_change': '调整后库存不能为负数'})
+            d.stock += qty
+            d.save()
+            serializer.save(created_by=self.request.user if self.request.user.is_authenticated else None)
+            log_operation(
+                user=self.request.user if self.request.user.is_authenticated else None,
+                action_type='INVENTORY_ADJUST',
+                target_type='drug',
+                target_id=d.id,
+                detail=f'{reason} 变动{qty:+d}',
+            )
+            d2 = Drug.objects.select_for_update().get(pk=d.pk)
+            maybe_alerts_for_drug(d2, d2.department or '')
 
 
 class AuthViewSet(viewsets.ViewSet):
@@ -283,7 +512,17 @@ class AuthViewSet(viewsets.ViewSet):
         serializer = UserRegisterSerializer(data=request.data)
         
         if serializer.is_valid():
-            user = serializer.save()
+            from .services.log_service import log_operation
+
+            with transaction.atomic():
+                user = serializer.save()
+                log_operation(
+                    user=None,
+                    action_type='CREATE_USER',
+                    target_type='user',
+                    target_id=user.id,
+                    detail=f'注册新用户 {user.username}',
+                )
             return Response({
                 'message': '注册成功',
                 'user': UserSerializer(user).data
@@ -297,7 +536,7 @@ class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [AllowAny]  # 暂时允许所有用户
-    
+
     def get_queryset(self):
         """获取查询集，支持按用户名搜索"""
         queryset = User.objects.select_related('profile').all()
@@ -305,19 +544,32 @@ class UserViewSet(viewsets.ModelViewSet):
         if username is not None:
             queryset = queryset.filter(username__icontains=username)
         return queryset
-    
+
     def update(self, request, *args, **kwargs):
         """更新用户，确保返回最新的角色信息"""
+        from .models import UserProfile
+        from .services.log_service import log_operation
+
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+        old_profile = UserProfile.objects.filter(user=instance).first()
+        old_role = old_profile.role if old_profile else None
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        
-        # 重新从数据库获取用户实例（使用select_related确保profile被加载）
+        with transaction.atomic():
+            self.perform_update(serializer)
+            instance.refresh_from_db()
+            new_profile = UserProfile.objects.filter(user=instance).first()
+            new_role = new_profile.role if new_profile else None
+            if old_role != new_role and request.user.is_authenticated:
+                log_operation(
+                    user=request.user,
+                    action_type='UPDATE_USER_ROLE',
+                    target_type='user',
+                    target_id=instance.id,
+                    detail=f'{old_role}->{new_role}',
+                )
         updated_instance = User.objects.select_related('profile').get(pk=instance.pk)
-        
-        # 重新序列化以获取最新的角色信息
         updated_serializer = self.get_serializer(updated_instance)
         return Response(updated_serializer.data)
 
@@ -328,46 +580,43 @@ class DashboardViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['get'], url_path='stats')
     def stats(self, request):
-        """获取今日核心指标"""
+        """数据概览：用药总次数、活跃药品数、低库存、预警数量（不含金额/待发药等）"""
         today = timezone.now().date()
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-        
-        # 总金额（所有药品的成本价格总和）
-        from django.db.models import Sum as DSum
-        total_amount = Drug.objects.aggregate(
-            total=DSum('cost_price')
-        )['total'] or 0
-        # 转换为浮点数并保留2位小数
-        total_amount = float(total_amount) if total_amount else 0.0
-        
-        # 待发药处方（今日创建的用药记录数）
-        pending_prescriptions = MedicationRecord.objects.filter(
-            record_time__date=today
+
+        med = scoped_active_med(request)
+        total_medication_count = med.count()
+        active_drug_count = Drug.objects.filter(
+            id__in=med.values_list('drug_id', flat=True).distinct()
         ).count()
-        
-        # 今日新增预警（今日过期或库存不足的药品数）
-        expiring_drugs = Drug.objects.filter(
-            expiry_date__lte=today + timedelta(days=30),
-            expiry_date__gte=today
-        ).count()
-        low_stock_drugs = Drug.objects.filter(stock__lt=50).count()
-        today_warnings = expiring_drugs + low_stock_drugs
-        
-        # 周转率（今日出库量 / 总库存）
-        today_consumption = MedicationRecord.objects.filter(
-            record_time__date=today
-        ).aggregate(
-            total=Sum('quantity')
-        )['total'] or 0
-        total_stock = Drug.objects.aggregate(total=Sum('stock'))['total'] or 1
-        turnover_rate = round((today_consumption / total_stock) * 100, 2) if total_stock > 0 else 0
-        
+        low_stock_count = dashboard_scoped_drugs(request).filter(stock__lte=F('min_stock')).count()
+
+        expiring_count = 0
+        for d in dashboard_scoped_drugs(request).exclude(expiry_date__isnull=True):
+            days = d.expiry_warning_days or 30
+            if today <= d.expiry_date <= today + timedelta(days=days):
+                expiring_count += 1
+        warning_count = low_stock_count + expiring_count
+
         return Response({
-            'total_amount': round(total_amount, 2),
-            'pending_prescriptions': pending_prescriptions,
-            'today_warnings': today_warnings,
-            'turnover_rate': turnover_rate
+            'total_medication_count': total_medication_count,
+            'active_drug_count': active_drug_count,
+            'low_stock_count': low_stock_count,
+            'warning_count': warning_count,
         })
+
+    def list(self, request):
+        """首页 Dashboard：公告、政策、按角色拆分的提醒"""
+        role = _role(request.user) if request.user.is_authenticated else None
+        return Response(build_home_payload(role or 'patient', request))
+
+    @action(detail=False, methods=['get'], url_path='trends')
+    def trends(self, request):
+        """数据趋势：处方量折线 + 药品共现矩阵 + 疾病趋势"""
+        return Response(build_trends_payload(request))
+
+    @action(detail=False, methods=['get'], url_path='recommendations')
+    def recommendations(self, request):
+        return Response(build_recommendations_payload(request))
     
     @action(detail=False, methods=['get'], url_path='consumption-trend')
     def consumption_trend(self, request):
@@ -377,7 +626,7 @@ class DashboardViewSet(viewsets.ViewSet):
         start_date = end_date - timedelta(days=30)
         
         # 按日期聚合用药记录
-        records = MedicationRecord.objects.filter(
+        records = scoped_active_med(request).filter(
             record_time__date__gte=start_date,
             record_time__date__lte=end_date
         ).annotate(
@@ -424,7 +673,7 @@ class DashboardViewSet(viewsets.ViewSet):
             start_date = timezone.now().date() - timedelta(days=90)
             
             # 按prescription_id分组，获取同一处方下的所有药品
-            records = MedicationRecord.objects.filter(
+            records = scoped_active_med(request).filter(
                 record_time__date__gte=start_date
             ).exclude(prescription_id='').select_related('drug').values('prescription_id', 'drug_id').distinct()
             
@@ -437,7 +686,7 @@ class DashboardViewSet(viewsets.ViewSet):
             
             # 统计每个药品的总消耗量（用于节点大小）
             drug_total_consumption = defaultdict(int)
-            for record in MedicationRecord.objects.all():
+            for record in scoped_active_med(request).all():
                 drug_total_consumption[record.drug_id] += record.quantity
             
             # 使用itertools.combinations统计药品共现
@@ -515,7 +764,7 @@ class DashboardViewSet(viewsets.ViewSet):
         """获取库存紧缺Top10（引入缺口程度概念）"""
         # 计算每个药品的库存紧缺程度（基于动态阈值）
         thirty_days_ago = timezone.now() - timedelta(days=30)
-        drug_consumption = MedicationRecord.objects.filter(
+        drug_consumption = scoped_active_med(request).filter(
             record_time__gte=thirty_days_ago
         ).values('drug').annotate(
             total_consumption=Sum('quantity')
@@ -525,11 +774,11 @@ class DashboardViewSet(viewsets.ViewSet):
         
         # 计算每日消耗量（用于计算标准差）
         drug_consumption_daily = defaultdict(list)
-        for record in MedicationRecord.objects.filter(record_time__gte=thirty_days_ago):
+        for record in scoped_active_med(request).filter(record_time__gte=thirty_days_ago):
             drug_consumption_daily[record.drug_id].append(record.quantity)
         
         low_stock_drugs = []
-        for drug in Drug.objects.all():
+        for drug in dashboard_scoped_drugs(request):
             avg_daily_consumption = consumption_dict.get(drug.id, 0) / 30.0 if consumption_dict.get(drug.id, 0) > 0 else 0
             
             # 动态阈值算法：SS = (Avg_usage × L) + (z × σ × √L)
@@ -669,7 +918,7 @@ class DashboardViewSet(viewsets.ViewSet):
         end_date = timezone.now().date()
         
         # 按月聚合所有药品的消耗
-        records = MedicationRecord.objects.filter(
+        records = scoped_active_med(request).filter(
             record_time__date__gte=start_date,
             record_time__date__lte=end_date
         ).annotate(
@@ -726,7 +975,7 @@ class DashboardViewSet(viewsets.ViewSet):
             start_date = timezone.now().date() - timedelta(days=90)
             
             # 按prescription_id分组，获取同一处方下的所有药品
-            records = MedicationRecord.objects.filter(
+            records = scoped_active_med(request).filter(
                 record_time__date__gte=start_date
             ).exclude(prescription_id='').select_related('drug').values('prescription_id', 'drug_id').distinct()
             
@@ -781,4 +1030,22 @@ class DashboardViewSet(viewsets.ViewSet):
                 'results': [],
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
+
+class OperationLogViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = OperationLog.objects.select_related('user').all()
+    serializer_class = OperationLogSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_queryset(self):
+        qs = super().get_queryset().order_by('-created_at')
+        if at := self.request.query_params.get('action_type'):
+            qs = qs.filter(action_type=at)
+        if uid := self.request.query_params.get('user_id'):
+            qs = qs.filter(user_id=uid)
+        if df := self.request.query_params.get('date_from'):
+            qs = qs.filter(created_at__date__gte=df)
+        if dr := self.request.query_params.get('date_to'):
+            qs = qs.filter(created_at__date__lte=dr)
+        return qs
+

@@ -16,31 +16,63 @@
         active-text-color="#409EFF"
         class="sidebar-menu"
       >
-        <!-- 管理员和医生可以看到数据看板 -->
-        <el-menu-item v-if="userRole === 'admin' || userRole === 'doctor'" index="/layout/dashboard">
-          <el-icon><DataAnalysis /></el-icon>
-          <template #title>数据看板</template>
+        <el-menu-item index="/layout/dashboard">
+          <el-icon><Odometer /></el-icon>
+          <template #title>工作台</template>
         </el-menu-item>
-        <!-- 管理员和医生可以管理药品 -->
-        <el-menu-item v-if="userRole === 'admin' || userRole === 'doctor'" index="/layout/drugs">
-          <el-icon><Goods /></el-icon>
-          <template #title>药品管理</template>
-        </el-menu-item>
-        <!-- 所有角色都可以查看用药记录 -->
+
+        <el-sub-menu
+          v-if="userRole === 'admin' || userRole === 'doctor' || userRole === 'pharmacist'"
+          index="sub-dashboard"
+        >
+          <template #title>
+            <el-icon><DataAnalysis /></el-icon>
+            <span>数据看板</span>
+          </template>
+          <el-menu-item index="/layout/data-overview">数据概览</el-menu-item>
+          <el-menu-item index="/layout/data-trends">数据趋势</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu
+          v-if="userRole === 'admin' || userRole === 'doctor' || userRole === 'pharmacist'"
+          index="sub-drugs"
+        >
+          <template #title>
+            <el-icon><Goods /></el-icon>
+            <span>药品管理</span>
+          </template>
+          <el-menu-item index="/layout/drugs">药品列表</el-menu-item>
+          <el-menu-item v-if="userRole === 'admin' || userRole === 'pharmacist'" index="/layout/drugs/stock-in">
+            入库记录
+          </el-menu-item>
+          <el-menu-item v-if="userRole === 'admin' || userRole === 'pharmacist'" index="/layout/drugs/inventory">
+            库存盘点
+          </el-menu-item>
+        </el-sub-menu>
+
         <el-menu-item index="/layout/medication-records">
           <el-icon><Document /></el-icon>
           <template #title>用药记录</template>
         </el-menu-item>
-        <!-- 管理员可以看到智能预警 -->
+
         <el-menu-item v-if="userRole === 'admin'" index="/layout/warnings">
           <el-icon><Warning /></el-icon>
           <template #title>智能预警</template>
         </el-menu-item>
-        <!-- 只有管理员可以管理用户 -->
-        <el-menu-item v-if="userRole === 'admin'" index="/layout/users">
-          <el-icon><User /></el-icon>
-          <template #title>用户管理</template>
+
+        <el-menu-item v-if="userRole === 'admin'" index="/layout/operation-logs">
+          <el-icon><List /></el-icon>
+          <template #title>操作审计</template>
         </el-menu-item>
+
+        <el-sub-menu v-if="userRole === 'admin'" index="sub-users">
+          <template #title>
+            <el-icon><User /></el-icon>
+            <span>用户管理</span>
+          </template>
+          <el-menu-item index="/layout/users">员工列表</el-menu-item>
+          <el-menu-item index="/layout/users/permissions">权限设置</el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
@@ -94,7 +126,9 @@ import {
   Fold,
   Expand,
   Avatar,
-  ArrowDown
+  ArrowDown,
+  Odometer,
+  List
 } from '@element-plus/icons-vue'
 
 const router = useRouter()

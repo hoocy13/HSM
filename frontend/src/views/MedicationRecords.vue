@@ -52,6 +52,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="drug_name" label="药品名称" />
+        <el-table-column prop="disease_name" label="疾病/诊断" width="120">
+          <template #default="{ row }">
+            {{ row.disease_name || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="user" label="用户" width="150">
           <template #default="{ row }">
             {{ row.user?.username || '-' }}
@@ -64,8 +69,22 @@
           </template>
         </el-table-column>
         <el-table-column prop="notes" label="备注" />
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
+            <el-tag v-if="row.status === 'CANCELLED'" type="info" size="small">已作废</el-tag>
+            <el-tag v-else type="success" size="small">有效</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="canCancel(row)"
+              type="warning"
+              size="small"
+              @click="handleCancel(row)"
+            >
+              撤销处方
+            </el-button>
             <el-button
               type="danger"
               size="small"
@@ -124,6 +143,13 @@
             <div v-else class="stock-info" style="color: #909399;">
               请先选择药品
             </div>
+          </el-form-item>
+          <el-form-item label="疾病/诊断">
+            <el-input
+              v-model="formData.disease_name"
+              placeholder="如：流感、高血压（可选，用于趋势统计）"
+              clearable
+            />
           </el-form-item>
           <el-form-item label="备注" prop="notes">
             <el-input
@@ -209,6 +235,13 @@
               添加药品
             </el-button>
           </el-form-item>
+          <el-form-item label="疾病/诊断">
+            <el-input
+              v-model="prescriptionFormData.disease_name"
+              placeholder="整张处方共有诊断，如：流感（可选）"
+              clearable
+            />
+          </el-form-item>
           <el-form-item label="备注">
             <el-input
               v-model="prescriptionFormData.notes"
@@ -265,6 +298,7 @@ const formRef = ref(null)
 const formData = reactive({
   drug: null,
   quantity: 1,
+  disease_name: '',
   notes: ''
 })
 
@@ -276,6 +310,7 @@ const prescriptionFormData = reactive({
   items: [
     { drug: null, quantity: 1 }
   ],
+  disease_name: '',
   notes: ''
 })
 
@@ -386,6 +421,7 @@ const handleAdd = () => {
   // 重置表单数据
   formData.drug = null
   formData.quantity = 0  // 初始化为0，避免 min > max 错误
+  formData.disease_name = ''
   formData.notes = ''
   
   // 如果药品列表为空，尝试加载（但不阻塞对话框打开）
@@ -403,6 +439,7 @@ const handleAdd = () => {
 const handleAddPrescription = () => {
   // 重置处方表单数据
   prescriptionFormData.items = [{ drug: null, quantity: 1 }]
+  prescriptionFormData.disease_name = ''
   prescriptionFormData.notes = ''
   
   // 如果药品列表为空，尝试加载
@@ -483,11 +520,13 @@ const handleSubmitPrescription = async () => {
     const prescriptionId = `RX${Date.now()}${Math.floor(Math.random() * 1000)}`
     
     // 批量创建用药记录（使用相同的prescription_id）
+    const dn = (prescriptionFormData.disease_name || '').trim() || null
     const promises = validItems.map(item => 
       medicationApi.createRecord({
         drug: item.drug,
         quantity: item.quantity,
         prescription_id: prescriptionId,
+        disease_name: dn,
         notes: prescriptionFormData.notes || null
       })
     )
@@ -517,6 +556,7 @@ const resetPrescriptionForm = () => {
     prescriptionFormRef.value.resetFields()
   }
   prescriptionFormData.items = [{ drug: null, quantity: 1 }]
+  prescriptionFormData.disease_name = ''
   prescriptionFormData.notes = ''
 }
 
@@ -549,6 +589,7 @@ const handleSubmit = async () => {
         await medicationApi.createRecord({
           drug: formData.drug,
           quantity: formData.quantity,
+          disease_name: (formData.disease_name || '').trim() || null,
           notes: formData.notes || null
         })
         ElMessage.success('添加成功')
@@ -575,6 +616,7 @@ const resetForm = () => {
   }
   formData.drug = null
   formData.quantity = 0  // 重置为0，避免 min > max 错误
+  formData.disease_name = ''
   formData.notes = ''
 }
 
@@ -592,6 +634,34 @@ const handleSizeChange = (size) => {
 const handlePageChange = (page) => {
   currentPage.value = page
   fetchRecords()
+}
+
+const canCancel = (row) => {
+  if (row.status !== 'ACTIVE') return false
+  if (!row.prescription_id) return false
+  if (userRole.value === 'admin') return true
+  if (userRole.value === 'doctor' && row.prescribed_by?.id === currentUserId.value) return true
+  return false
+}
+
+const handleCancel = (row) => {
+  ElMessageBox.confirm('确认撤销该处方关联的全部药品记录并回滚库存？', '撤销处方', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  })
+    .then(async () => {
+      try {
+        await medicationApi.cancelPrescription(row.id)
+        ElMessage.success('已撤销')
+        fetchRecords()
+        fetchDrugs()
+      } catch (e) {
+        const msg = e.response?.data?.error || '撤销失败'
+        ElMessage.error(msg)
+      }
+    })
+    .catch(() => {})
 }
 
 const handleDelete = (row) => {

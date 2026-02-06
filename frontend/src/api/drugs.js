@@ -9,6 +9,14 @@ const api = axios.create({
   }
 })
 
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 // 药品 API
 export const drugApi = {
   // 获取药品列表
@@ -49,6 +57,20 @@ export const drugApi = {
   // 获取预警药品列表
   getWarnings() {
     return api.get('/drugs/warnings/')
+  },
+
+  getStockTrend(id) {
+    return api.get(`/drugs/${id}/stock-trend/`)
+  }
+}
+
+// 库存盘点 / 损溢
+export const inventoryApi = {
+  list(params = {}) {
+    return api.get('/inventory-adjustments/', { params })
+  },
+  create(data) {
+    return api.post('/inventory-adjustments/', data)
   }
 }
 
@@ -67,6 +89,10 @@ export const medicationApi = {
   // 删除用药记录
   deleteRecord(id) {
     return api.delete(`/medication-records/${id}/`)
+  },
+
+  cancelPrescription(id) {
+    return api.post(`/medication-records/${id}/cancel/`)
   }
 }
 
@@ -113,9 +139,18 @@ export const userApi = {
 
 // Dashboard API
 export const dashboardApi = {
+  // 首页聚合（公告、政策、角色提醒）
+  getHome() {
+    return api.get('/dashboard/')
+  },
+
   // 获取今日核心指标
   getStats() {
     return api.get('/dashboard/stats/')
+  },
+
+  getTrends() {
+    return api.get('/dashboard/trends/')
   },
   
   // 获取消耗趋势预测
@@ -146,6 +181,16 @@ export const dashboardApi = {
   // 获取经常一起被开出的药品Top5
   getTop5Correlated() {
     return api.get('/dashboard/top5-correlated/')
+  },
+
+  getRecommendations() {
+    return api.get('/dashboard/recommendations/')
+  }
+}
+
+export const operationLogApi = {
+  list(params = {}) {
+    return api.get('/operation-logs/', { params })
   }
 }
 
