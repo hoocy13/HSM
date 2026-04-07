@@ -583,7 +583,39 @@ class DashboardViewSet(viewsets.ViewSet):
         """数据概览：用药总次数、活跃药品数、低库存、预警数量（不含金额/待发药等）"""
         today = timezone.now().date()
 
+        # 支持 days=30 或 date_from/date_to，默认近30天（不改变返回结构）
+        start_date = None
+        end_date = None
+        try:
+            qp = request.query_params
+            if qp.get('date_from') and qp.get('date_to'):
+                try:
+                    start_date = datetime.strptime(qp.get('date_from'), '%Y-%m-%d').date()
+                    end_date = datetime.strptime(qp.get('date_to'), '%Y-%m-%d').date()
+                    if start_date > end_date:
+                        start_date, end_date = end_date, start_date
+                except Exception:
+                    start_date = None
+                    end_date = None
+            elif qp.get('days'):
+                try:
+                    days = int(qp.get('days'))
+                    days = max(1, min(days, 365))
+                    end_date = today
+                    start_date = today - timedelta(days=days)
+                except Exception:
+                    start_date = None
+                    end_date = None
+            else:
+                end_date = today
+                start_date = today - timedelta(days=30)
+        except Exception:
+            end_date = today
+            start_date = today - timedelta(days=30)
+
         med = scoped_active_med(request)
+        if start_date and end_date:
+            med = med.filter(record_time__date__gte=start_date, record_time__date__lte=end_date)
         total_medication_count = med.count()
         active_drug_count = Drug.objects.filter(
             id__in=med.values_list('drug_id', flat=True).distinct()

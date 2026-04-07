@@ -1,5 +1,19 @@
 <template>
   <div class="data-overview">
+    <el-card class="filter-card" style="margin-bottom: 12px;">
+      <div class="filter-row">
+        <div class="filter-title">时间窗口</div>
+        <el-segmented
+          v-model="days"
+          :options="[
+            { label: '近7天', value: 7 },
+            { label: '近30天', value: 30 },
+            { label: '近90天', value: 90 }
+          ]"
+          @change="loadStats"
+        />
+      </div>
+    </el-card>
     <el-row :gutter="20" class="stats-row">
       <el-col :xs="24" :sm="12" :md="6" v-for="stat in stats" :key="stat.key">
         <el-card class="stat-card" :class="stat.type">
@@ -45,6 +59,7 @@ import { ElMessage } from 'element-plus'
 import { Document, Goods, Warning, Bell } from '@element-plus/icons-vue'
 import { dashboardApi } from '../api/drugs.js'
 
+const days = ref(30)
 const stats = ref([
   { key: 'total_medication_count', label: '用药总次数', value: '0', icon: Document, type: 'primary' },
   { key: 'active_drug_count', label: '活跃药品数量', value: '0', icon: Goods, type: 'success' },
@@ -56,7 +71,7 @@ const lowStockData = ref([])
 
 const loadStats = async () => {
   try {
-    const { data } = await dashboardApi.getStats()
+    const { data } = await dashboardApi.getStats({ days: days.value })
     stats.value[0].value = String(data.total_medication_count ?? 0)
     stats.value[1].value = String(data.active_drug_count ?? 0)
     stats.value[2].value = String(data.low_stock_count ?? 0)
@@ -83,6 +98,20 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.filter-card :deep(.el-card__body) {
+  padding: 10px 12px;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filter-title {
+  font-weight: 600;
+  color: #303133;
+}
 .stat-card {
   margin-bottom: 12px;
 }

@@ -31,6 +31,7 @@
           </template>
           <el-menu-item index="/layout/data-overview">数据概览</el-menu-item>
           <el-menu-item index="/layout/data-trends">数据趋势</el-menu-item>
+          <el-menu-item index="/layout/data-relations">关联关系图</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu

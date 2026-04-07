@@ -1,11 +1,25 @@
 <template>
   <div class="data-trends">
+    <el-card class="filter-card" style="margin-bottom: 12px;">
+      <div class="filter-row">
+        <div class="filter-title">时间窗口</div>
+        <el-segmented
+          v-model="days"
+          :options="[
+            { label: '近7天', value: 7 },
+            { label: '近30天', value: 30 },
+            { label: '近90天', value: 90 }
+          ]"
+          @change="load"
+        />
+      </div>
+    </el-card>
     <el-card>
       <template #header>用药趋势（按日记录量）</template>
       <div ref="lineRef" style="width: 100%; height: 380px;"></div>
     </el-card>
     <el-card style="margin-top: 20px;">
-      <template #header>疾病标签统计（近30天用药记录）</template>
+      <template #header>疾病标签统计（时间窗口内用药记录）</template>
       <div ref="diseaseRef" style="width: 100%; height: 360px;"></div>
     </el-card>
     <el-card style="margin-top: 20px;">
@@ -27,10 +41,11 @@ const heatRef = ref(null)
 let lineChart = null
 let diseaseChart = null
 let heatChart = null
+const days = ref(30)
 
 const load = async () => {
   try {
-    const { data } = await dashboardApi.getTrends()
+    const { data } = await dashboardApi.getTrends({ days: days.value })
     const trend = data.prescription_trend || []
     const diseaseTrend = data.disease_trend || []
     const dm = data.drug_matrix || { labels: [], matrix: [] }
@@ -169,3 +184,20 @@ onUnmounted(() => {
   heatChart?.dispose()
 })
 </script>
+
+<style scoped>
+.filter-card :deep(.el-card__body) {
+  padding: 10px 12px;
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filter-title {
+  font-weight: 600;
+  color: #303133;
+}
+</style>

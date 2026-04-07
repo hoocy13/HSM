@@ -111,32 +111,6 @@
               <el-link type="primary" @click="goToLogin" class="link-text">立即登录</el-link>
             </div>
           </el-form-item>
-          
-          <el-divider>
-            <span class="divider-text">Or</span>
-          </el-divider>
-          
-          <el-form-item>
-            <el-button
-              size="large"
-              class="social-button qq-button"
-              @click="handleSocialLogin('qq')"
-            >
-              <span class="social-icon">QQ</span>
-              Sign Up with QQ
-            </el-button>
-          </el-form-item>
-          
-          <el-form-item>
-            <el-button
-              size="large"
-              class="social-button wechat-button"
-              @click="handleSocialLogin('wechat')"
-            >
-              <span class="social-icon">微信</span>
-              Sign Up with WeChat
-            </el-button>
-          </el-form-item>
         </el-form>
       </div>
     </div>
@@ -216,10 +190,6 @@ const handleRegister = async () => {
       }
     }
   })
-}
-
-const handleSocialLogin = (type) => {
-  ElMessage.info(`${type === 'qq' ? 'QQ' : '微信'}登录功能开发中...`)
 }
 
 const goToLogin = () => {

@@ -145,12 +145,12 @@ export const dashboardApi = {
   },
 
   // 获取今日核心指标
-  getStats() {
-    return api.get('/dashboard/stats/')
+  getStats(params = {}) {
+    return api.get('/dashboard/stats/', { params })
   },
 
-  getTrends() {
-    return api.get('/dashboard/trends/')
+  getTrends(params = {}) {
+    return api.get('/dashboard/trends/', { params })
   },
   
   // 获取消耗趋势预测

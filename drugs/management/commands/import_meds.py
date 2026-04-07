@@ -10,7 +10,8 @@ from datetime import date, timedelta, datetime
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.contrib.auth.models import User
-from drugs.models import Drug, MedicationRecord
+from drugs.models import Drug, MedicationRecord, UserProfile, InventoryAdjustment, Alert, OperationLog
+from drugs.services.alert_service import maybe_alerts_for_drug, maybe_disease_spike_alert
 
 
 class Command(BaseCommand):
@@ -33,11 +34,44 @@ class Command(BaseCommand):
             action='store_true',
             help='跳过用药记录生成，只导入药品'
         )
+        parser.add_argument(
+            '--start-date',
+            type=str,
+            default='2025-08-01',
+            help='模拟用药记录开始日期（YYYY-MM-DD，默认: 2025-08-01）'
+        )
+        parser.add_argument(
+            '--end-date',
+            type=str,
+            default='2026-04-10',
+            help='模拟用药记录结束日期（YYYY-MM-DD，默认: 2026-04-10）'
+        )
+        parser.add_argument(
+            '--reset-enhancements',
+            action='store_true',
+            help='生成前清理增强模块数据（MedicationRecord/InventoryAdjustment/Alert/OperationLog），并重置药品库存'
+        )
 
     def handle(self, *args, **options):
         file_path = options['file']
         skip_drugs = options['skip_drugs']
         skip_records = options['skip_records']
+        start_date_str = options['start_date']
+        end_date_str = options['end_date']
+        reset_enhancements = options['reset_enhancements']
+
+        try:
+            start_date = timezone.make_aware(datetime.strptime(start_date_str, '%Y-%m-%d'))
+            end_date = timezone.make_aware(datetime.strptime(end_date_str, '%Y-%m-%d'))
+            # 结束日期包含当天的 23:59:59
+            end_date = end_date.replace(hour=23, minute=59, second=59)
+        except ValueError:
+            self.stdout.write(self.style.ERROR('日期格式错误，请使用 YYYY-MM-DD'))
+            return
+
+        if end_date <= start_date:
+            self.stdout.write(self.style.ERROR('end-date 必须大于 start-date'))
+            return
 
         # 导入药品数据
         if not skip_drugs:
@@ -56,12 +90,15 @@ class Command(BaseCommand):
         # 生成模拟用药记录
         if not skip_records:
             self.stdout.write('开始生成模拟用药记录...')
-            # 数据清理：清空旧的用药记录
-            self.stdout.write('清理旧的用药记录数据...')
-            MedicationRecord.objects.all().delete()
-            self.stdout.write(self.style.SUCCESS('已清空旧的用药记录'))
+            if reset_enhancements:
+                self.stdout.write('清理旧的模拟数据（增强模块）...')
+                MedicationRecord.objects.all().delete()
+                InventoryAdjustment.objects.all().delete()
+                Alert.objects.all().delete()
+                OperationLog.objects.all().delete()
+                self.stdout.write(self.style.SUCCESS('已清空 MedicationRecord / InventoryAdjustment / Alert / OperationLog'))
             
-            record_count = self.generate_medication_records(drugs)
+            record_count = self.generate_medication_records(drugs, start_date=start_date, end_date=end_date, reset_stocks=reset_enhancements)
             self.stdout.write(
                 self.style.SUCCESS(f'成功生成 {record_count} 条用药记录')
             )
@@ -152,29 +189,52 @@ class Command(BaseCommand):
 
         return imported_count
 
-    def generate_medication_records(self, drugs):
+    def generate_medication_records(self, drugs, start_date, end_date, reset_stocks=False):
         """生成模拟用药记录（优化版：包含高频关联组合和正态分布时间）"""
         if not drugs:
             self.stdout.write(self.style.WARNING('没有药品数据，无法生成用药记录'))
             return 0
 
-        # 获取或创建一些测试用户
+        departments = ['内科', '外科', '儿科', '呼吸科', '心内科', '内分泌科']
+
+        def ensure_user(username, role='patient', department=''):
+            user, created = User.objects.get_or_create(
+                username=username,
+                defaults={'email': f'{username}@example.com'}
+            )
+            if created:
+                user.set_password('123456')
+                user.save()
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.role = role
+            profile.department = department or ''
+            profile.save()
+            return user
+
+        # 创建/确保一批用户（病人+医生+药剂师，按科室分配）
+        patients = [ensure_user(f'patient_{i}', role='patient', department=random.choice(departments)) for i in range(1, 21)]
+        doctors = [ensure_user(f'doctor_{dept}', role='doctor', department=dept) for dept in departments]
+        pharmacists = [ensure_user(f'pharmacist_{dept}', role='pharmacist', department=dept) for dept in departments]
+
         users = list(User.objects.all())
-        if not users:
-            # 如果没有用户，创建一些测试用户
-            for i in range(1, 11):
-                user, created = User.objects.get_or_create(
-                    username=f'patient_{i}',
-                    defaults={
-                        'email': f'patient_{i}@example.com',
-                        'first_name': f'患者{i}',
-                        'last_name': '测试'
-                    }
+
+        # 可选：重置药品库存与科室（避免重复执行后库存越来越小）
+        if reset_stocks:
+            self.stdout.write('重置药品库存与部分科室字段...')
+            for d in drugs:
+                d.stock = random.randint(80, 600)
+                # 50% 设为全院共用，50% 归属某科室
+                d.department = '' if random.random() < 0.5 else random.choice(departments)
+                d.save(update_fields=['stock', 'department'])
+                # 生成一条“初始入库”流水，并回写 created_at 到历史时间（用于库存趋势图）
+                adj = InventoryAdjustment.objects.create(
+                    drug=d,
+                    quantity_change=d.stock,
+                    reason='初始入库（模拟数据）',
+                    created_by=random.choice(pharmacists) if pharmacists else None,
                 )
-                if created:
-                    user.set_password('123456')
-                    user.save()
-                users.append(user)
+                back_date = start_date + timedelta(days=random.randint(0, max(1, (end_date.date() - start_date.date()).days)))
+                InventoryAdjustment.objects.filter(id=adj.id).update(created_at=back_date)
 
         # 识别高频关联药品组合（通过关键词匹配）
         # 定义3-5组高频关联药品组合
@@ -245,11 +305,27 @@ class Command(BaseCommand):
         for pair in high_frequency_pairs:
             self.stdout.write(f'  - {pair["name"]}: 目标生成 {pair["target_count"]} 次')
 
-        # 生成从2025年8月1日到2026年1月31日的日期范围
-        from datetime import datetime
-        start_date = timezone.make_aware(datetime(2025, 8, 1))
-        end_date = timezone.make_aware(datetime(2026, 1, 31, 23, 59, 59))
         total_days = (end_date.date() - start_date.date()).days
+        if total_days <= 0:
+            self.stdout.write(self.style.ERROR('日期范围过短，无法生成数据'))
+            return 0
+
+        disease_pool = ['感冒', '流感', '高血压', '糖尿病', '冠心病', '胃炎', '咽炎', '支气管炎']
+
+        def infer_disease(drug_name: str, record_dt: datetime):
+            n = drug_name or ''
+            if any(k in n for k in ['胰岛素', '二甲双胍', '格列', '降糖']):
+                return '糖尿病'
+            if any(k in n for k in ['降压', '地平', '普利', '沙坦', '氢氯噻嗪', '呋塞米']):
+                return '高血压'
+            if any(k in n for k in ['阿司匹林', '氯吡格雷', '波立维']):
+                return '冠心病'
+            if any(k in n for k in ['感冒', '退热', '止咳', '抗病毒', '连花', '双黄连']):
+                # 12-2 月更偏向“流感”
+                return '流感' if record_dt.month in [12, 1, 2] and random.random() < 0.6 else '感冒'
+            if any(k in n for k in ['头孢', '霉素', '青霉素', '抗生素']):
+                return random.choice(['咽炎', '支气管炎', '感冒'])
+            return random.choice(disease_pool)
 
         records = []
         prescription_counter = 1
@@ -262,7 +338,7 @@ class Command(BaseCommand):
             pair_drugs = pair_info['drugs']
             
             for _ in range(target_count):
-                # 使用均匀分布生成日期（从2025年8月到现在）
+                # 使用均匀分布生成日期（start_date ~ end_date）
                 days_ago = random.randint(0, total_days - 1)
                 record_date = start_date + timedelta(days=days_ago)
                 
@@ -270,8 +346,11 @@ class Command(BaseCommand):
                 prescription_id = f'RX{prescription_counter:08d}'
                 prescription_counter += 1
                 
-                # 随机选择用户
-                user = random.choice(users)
+                # 随机选择患者与开方医生（决定科室隔离字段）
+                user = random.choice(patients) if patients else random.choice(users)
+                doctor = random.choice(doctors) if doctors else None
+                dept = (doctor.profile.department if doctor and hasattr(doctor, 'profile') else '') or ''
+                disease_name = infer_disease(pair_drugs[0].name, record_date)
                 
                 # 为同一处方生成多条记录（同一处方下的所有药品）
                 for drug in pair_drugs:
@@ -290,7 +369,11 @@ class Command(BaseCommand):
                         prescription_id=prescription_id,
                         quantity=quantity,
                         record_time=record_time,
-                        notes=None
+                        notes=None,
+                        status='ACTIVE',
+                        prescribed_by=doctor,
+                        disease_name=disease_name,
+                        department=dept,
                     )
                     records.append(record)
                     
@@ -309,7 +392,7 @@ class Command(BaseCommand):
         num_prescriptions = remaining_count // avg_drugs_per_prescription
         
         for i in range(num_prescriptions):
-            # 使用均匀分布生成日期（从2025年8月到2026年1月）
+            # 使用均匀分布生成日期（start_date ~ end_date）
             days_ago = random.randint(0, total_days - 1)
             record_date = start_date + timedelta(days=days_ago)
             # 确保 record_date 是 datetime 对象
@@ -325,8 +408,10 @@ class Command(BaseCommand):
             prescription_id = f'RX{prescription_counter:08d}'
             prescription_counter += 1
             
-            # 随机选择用户
-            user = random.choice(users)
+            # 随机选择患者与开方医生
+            user = random.choice(patients) if patients else random.choice(users)
+            doctor = random.choice(doctors) if doctors else None
+            dept = (doctor.profile.department if doctor and hasattr(doctor, 'profile') else '') or ''
             
             # 每个处方随机包含1-3种药品
             num_drugs_in_prescription = random.randint(1, 3)
@@ -342,6 +427,7 @@ class Command(BaseCommand):
             else:
                 selected_drugs = random.sample(drugs, min(num_drugs_in_prescription, len(drugs)))
             
+            disease_name = infer_disease(selected_drugs[0].name if selected_drugs else '', record_date)
             for drug in selected_drugs:
                 quantity = random.randint(1, 10)
                 hour = random.randint(8, 18)
@@ -371,7 +457,11 @@ class Command(BaseCommand):
                     prescription_id=prescription_id,
                     quantity=quantity,
                     record_time=record_time,
-                    notes=notes
+                    notes=notes,
+                    status='ACTIVE',
+                    prescribed_by=doctor,
+                    disease_name=disease_name,
+                    department=dept,
                 )
                 records.append(record)
             
@@ -388,6 +478,15 @@ class Command(BaseCommand):
         # 更新药品库存（扣除已使用的数量）
         self.stdout.write('更新药品库存...')
         self.update_drug_stocks()
+
+        # 生成预警（用于首页/仪表盘展示）
+        self.stdout.write('生成预警（Alert）...')
+        for d in Drug.objects.all():
+            maybe_alerts_for_drug(d, d.department or '')
+        # 疾病趋势预警（按科室+疾病名做一次检查）
+        sampled = MedicationRecord.objects.filter(status='ACTIVE').values_list('disease_name', 'department').distinct()[:50]
+        for dn, dept in sampled:
+            maybe_disease_spike_alert(dn or '', dept or '')
 
         total_records = MedicationRecord.objects.count()
         return total_records

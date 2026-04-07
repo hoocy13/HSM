@@ -43,6 +43,12 @@ const routes = [
         meta: { title: '数据趋势', roleRequired: ['admin', 'doctor', 'pharmacist'] }
       },
       {
+        path: 'data-relations',
+        name: 'DataRelations',
+        component: () => import('../views/DataRelations.vue'),
+        meta: { title: '关联关系图', roleRequired: ['admin', 'doctor', 'pharmacist'] }
+      },
+      {
         path: 'drugs',
         name: 'Drugs',
         component: () => import('../views/DrugList.vue'),

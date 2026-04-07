@@ -16,6 +16,46 @@ from .permissions import _role
 def _active_medication_qs():
     return MedicationRecord.objects.filter(status='ACTIVE')
 
+def _parse_date(s: str):
+    if not s:
+        return None
+    try:
+        # Expect YYYY-MM-DD
+        return timezone.datetime.strptime(s, '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _get_window_from_request(request, default_days=30):
+    """
+    支持 query:
+      - days=30（默认）
+      - date_from=YYYY-MM-DD & date_to=YYYY-MM-DD（包含 date_to 当天）
+    """
+    end_date = timezone.now().date()
+    start_date = end_date - timedelta(days=default_days)
+    if request is None:
+        return start_date, end_date
+    try:
+        qp = request.query_params
+    except Exception:
+        return start_date, end_date
+
+    df = _parse_date((qp.get('date_from') or '').strip())
+    dt = _parse_date((qp.get('date_to') or '').strip())
+    if df and dt:
+        if df > dt:
+            df, dt = dt, df
+        return df, dt
+
+    try:
+        days = int(qp.get('days') or default_days)
+        days = max(1, min(days, 365))
+        start_date = end_date - timedelta(days=days)
+    except Exception:
+        pass
+    return start_date, end_date
+
 
 def _scope_med_qs(qs, request):
     """医师/药剂师按科室过滤用药记录；admin 不过滤。"""
@@ -139,10 +179,9 @@ def pharmacist_expiry_alerts(days=None):
 
 def build_trends_payload(request=None):
     """prescription_trend、drug_matrix 与原先一致；新增 disease_trend。"""
-    end_date = timezone.now().date()
-    start_date = end_date - timedelta(days=30)
+    start_date, end_date = _get_window_from_request(request, default_days=30)
 
-    med = _active_medication_qs().filter(record_time__date__gte=start_date)
+    med = _active_medication_qs().filter(record_time__date__gte=start_date, record_time__date__lte=end_date)
     med = _scope_med_qs(med, request)
 
     rows = (
