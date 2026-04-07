@@ -140,4 +140,5 @@ python manage.py check
 
 # 前端构建验证
 cd frontend && npm run build
+
 ```
