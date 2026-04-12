@@ -8,15 +8,18 @@
         <el-option label="入库" value="STOCK_IN" />
         <el-option label="库存调整" value="INVENTORY_ADJUST" />
         <el-option label="更新药品" value="UPDATE_DRUG" />
-        <el-option label="注册用户" value="CREATE_USER" />
+        <el-option label="创建用户" value="CREATE_USER" />
         <el-option label="变更角色" value="UPDATE_USER_ROLE" />
+        <el-option label="发布公告" value="CREATE_ANNOUNCEMENT" />
+        <el-option label="更新公告" value="UPDATE_ANNOUNCEMENT" />
+        <el-option label="删除公告" value="DELETE_ANNOUNCEMENT" />
       </el-select>
-      <el-input v-model="filterUserId" placeholder="用户ID" clearable style="width: 120px" />
+      <el-input v-model="filterUserId" placeholder="用户名或用户ID" clearable style="width: 200px" />
       <el-date-picker v-model="dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" />
       <el-button type="primary" @click="load">查询</el-button>
     </div>
     <el-table :data="rows" v-loading="loading" stripe>
-      <el-table-column prop="id" label="ID" width="70" />
+      <el-table-column prop="id" label="记录编号" width="100" />
       <el-table-column prop="username" label="用户" width="120" />
       <el-table-column prop="action_type" label="行为" width="160" />
       <el-table-column prop="target_type" label="对象类型" width="100" />

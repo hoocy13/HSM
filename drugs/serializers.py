@@ -9,13 +9,14 @@ class DrugSerializer(serializers.ModelSerializer):
     """药品序列化器"""
     is_expiring_soon = serializers.SerializerMethodField()
     is_low_stock = serializers.SerializerMethodField()
-    
+    alert_rank = serializers.SerializerMethodField()
+
     class Meta:
         model = Drug
         fields = [
-            'id', 'name', 'category', 'stock', 'cost_price', 'expiry_date',
+            'id', 'name', 'specification', 'category', 'stock', 'cost_price', 'expiry_date',
             'min_stock', 'expiry_warning_days', 'department',
-            'is_expiring_soon', 'is_low_stock', 'created_at', 'updated_at',
+            'is_expiring_soon', 'is_low_stock', 'alert_rank', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -24,12 +25,46 @@ class DrugSerializer(serializers.ModelSerializer):
 
     def get_is_low_stock(self, obj):
         return obj.is_low_stock()
-    
+
+    def get_alert_rank(self, obj):
+        return getattr(obj, '_alert_rank', 0)
+
     def validate_stock(self, value):
         """验证库存不能为负数"""
         if value < 0:
             raise serializers.ValidationError("库存不能为负数")
         return value
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError("药品名称不能为空")
+        return name
+
+    def validate_department(self, value):
+        dept = (value or '').strip()
+        if not dept:
+            raise serializers.ValidationError("所属科室不能为空")
+        return dept
+
+    def validate_specification(self, value):
+        return (value or '').strip()[:50]
+
+    def validate(self, attrs):
+        """
+        严格校验：
+        - 创建药品时必须提供非空药品名和所属科室
+        - 更新时若传入字段也必须是非空字符串
+        """
+        creating = self.instance is None
+        if creating:
+            name = (attrs.get('name') or '').strip()
+            dept = (attrs.get('department') or '').strip()
+            if not name:
+                raise serializers.ValidationError({'name': '药品名称不能为空'})
+            if not dept:
+                raise serializers.ValidationError({'department': '所属科室不能为空'})
+        return attrs
 
 
 class DrugStockUpdateSerializer(serializers.Serializer):
@@ -46,7 +81,7 @@ class UserSerializer(serializers.ModelSerializer):
     """用户序列化器"""
     role = serializers.SerializerMethodField()
     role_write = serializers.ChoiceField(
-        choices=[('admin', '管理员'), ('doctor', '医生'), ('pharmacist', '药剂师'), ('patient', '患者')],
+        choices=[('admin', '管理员'), ('doctor', '医生'), ('pharmacist', '药剂师')],
         write_only=True,
         required=False,
         help_text="用户角色（仅更新时使用）"
@@ -93,8 +128,8 @@ class UserSerializer(serializers.ModelSerializer):
                 return profile.role
         except Exception:
             pass
-        return 'patient'  # 默认角色
-    
+        return 'doctor'
+
     def update(self, instance, validated_data):
         """更新用户信息，包括角色"""
         role = validated_data.pop('role_write', None)
@@ -126,42 +161,34 @@ class UserSerializer(serializers.ModelSerializer):
         return instance
 
 
-class UserRegisterSerializer(serializers.ModelSerializer):
-    """用户注册序列化器"""
-    password = serializers.CharField(write_only=True, min_length=6, help_text="密码（至少6位）")
-    password_confirm = serializers.CharField(write_only=True, min_length=6, help_text="确认密码")
-    role = serializers.ChoiceField(
-        choices=[('admin', '管理员'), ('doctor', '医生'), ('pharmacist', '药剂师'), ('patient', '患者')],
-        default='patient',
+class UserCreateSerializer(serializers.ModelSerializer):
+    """管理员创建员工账号"""
+    password = serializers.CharField(write_only=True, min_length=6)
+    role_write = serializers.ChoiceField(
+        choices=[('admin', '管理员'), ('doctor', '医生'), ('pharmacist', '药剂师')],
         write_only=True,
-        help_text="用户角色"
     )
-    
+    department_write = serializers.CharField(write_only=True, required=False, allow_blank=True, default='')
+    avatar_write = serializers.URLField(write_only=True, required=False, allow_blank=True, default='')
+
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'password_confirm', 'first_name', 'last_name', 'role']
-    
-    def validate(self, attrs):
-        """验证密码是否一致"""
-        if attrs['password'] != attrs['password_confirm']:
-            raise serializers.ValidationError({
-                'password_confirm': '两次输入的密码不一致'
-            })
-        return attrs
-    
+        fields = [
+            'username', 'email', 'password', 'first_name', 'last_name',
+            'role_write', 'department_write', 'avatar_write',
+        ]
+
     def create(self, validated_data):
-        """创建用户"""
-        validated_data.pop('password_confirm')
-        role = validated_data.pop('role', 'patient')
+        from .models import UserProfile
+
+        role = validated_data.pop('role_write')
         password = validated_data.pop('password')
+        department = (validated_data.pop('department_write', '') or '').strip()
+        avatar = validated_data.pop('avatar_write', '') or ''
         user = User.objects.create_user(**validated_data)
         user.set_password(password)
         user.save()
-        
-        # 创建用户角色
-        from .models import UserProfile
-        UserProfile.objects.get_or_create(user=user, defaults={'role': role})
-        
+        UserProfile.objects.create(user=user, role=role, department=department, avatar=avatar)
         return user
 
 
@@ -230,6 +257,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Announcement
         fields = ['id', 'title', 'content', 'is_active', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
 
 class PolicySerializer(serializers.ModelSerializer):
@@ -243,5 +271,5 @@ class OperationLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OperationLog
-        fields = ['id', 'user', 'username', 'action_type', 'target_type', 'target_id', 'detail', 'created_at']
-        read_only_fields = ['id', 'user', 'username', 'action_type', 'target_type', 'target_id', 'detail', 'created_at']
+        fields = ['id', 'username', 'action_type', 'target_type', 'target_id', 'detail', 'created_at']
+        read_only_fields = ['id', 'username', 'action_type', 'target_type', 'target_id', 'detail', 'created_at']

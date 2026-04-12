@@ -43,22 +43,14 @@
             <span>药品管理</span>
           </template>
           <el-menu-item index="/layout/drugs">药品列表</el-menu-item>
-          <el-menu-item v-if="userRole === 'admin' || userRole === 'pharmacist'" index="/layout/drugs/stock-in">
+          <el-menu-item v-if="userRole === 'pharmacist'" index="/layout/drugs/stock-in">
             入库记录
-          </el-menu-item>
-          <el-menu-item v-if="userRole === 'admin' || userRole === 'pharmacist'" index="/layout/drugs/inventory">
-            库存盘点
           </el-menu-item>
         </el-sub-menu>
 
-        <el-menu-item index="/layout/medication-records">
+        <el-menu-item v-if="userRole !== 'admin'" index="/layout/medication-records">
           <el-icon><Document /></el-icon>
           <template #title>用药记录</template>
-        </el-menu-item>
-
-        <el-menu-item v-if="userRole === 'admin'" index="/layout/warnings">
-          <el-icon><Warning /></el-icon>
-          <template #title>智能预警</template>
         </el-menu-item>
 
         <el-menu-item v-if="userRole === 'admin'" index="/layout/operation-logs">
@@ -72,6 +64,7 @@
             <span>用户管理</span>
           </template>
           <el-menu-item index="/layout/users">员工列表</el-menu-item>
+          <el-menu-item index="/layout/users/announcements">系统公告</el-menu-item>
           <el-menu-item index="/layout/users/permissions">权限设置</el-menu-item>
         </el-sub-menu>
       </el-menu>
@@ -123,7 +116,6 @@ import {
   Goods,
   User,
   Document,
-  Warning,
   Fold,
   Expand,
   Avatar,
@@ -137,7 +129,7 @@ const route = useRoute()
 
 const isCollapse = ref(false)
 const currentUser = ref(null)
-const userRole = ref('patient') // 默认角色
+const userRole = ref('doctor')
 
 // 当前激活的菜单
 const activeMenu = computed(() => {
@@ -172,7 +164,7 @@ onMounted(() => {
   if (userStr) {
     try {
       currentUser.value = JSON.parse(userStr)
-      userRole.value = currentUser.value.role || 'patient'
+      userRole.value = currentUser.value.role || 'doctor'
     } catch (e) {
       console.error('解析用户信息失败:', e)
     }

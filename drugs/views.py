@@ -7,13 +7,13 @@ from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Sum, Count, Q, F
+from django.db.models import Sum, Count, Q, F, Case, When, Value, IntegerField
 from django.db.models.functions import TruncDate
 from datetime import date, timedelta, datetime
 from collections import defaultdict
 from itertools import combinations
 import math
-from .models import Drug, MedicationRecord, InventoryAdjustment, OperationLog, Alert
+from .models import Drug, MedicationRecord, InventoryAdjustment, OperationLog, Alert, Announcement
 from .permissions import _role, IsAdminOrPharmacist, IsAdmin
 from .dashboard_service import build_home_payload, build_trends_payload, build_recommendations_payload, _scope_med_qs
 
@@ -36,10 +36,11 @@ from .serializers import (
     DrugStockUpdateSerializer,
     MedicationRecordSerializer,
     UserSerializer,
-    UserRegisterSerializer,
+    UserCreateSerializer,
     InventoryAdjustmentCreateSerializer,
     InventoryAdjustmentSerializer,
     OperationLogSerializer,
+    AnnouncementSerializer,
 )
 
 
@@ -95,6 +96,21 @@ class DrugViewSet(viewsets.ModelViewSet):
                 dept = ''
             if dept:
                 queryset = queryset.filter(Q(department=dept) | Q(department=''))
+        today = timezone.now().date()
+        exp_cutoff = today + timedelta(days=30)
+        queryset = queryset.annotate(
+            _alert_rank=Case(
+                When(expiry_date__isnull=False, expiry_date__lte=exp_cutoff, then=Value(2)),
+                When(stock__lte=F('min_stock'), then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        )
+        sort_mode = (self.request.query_params.get('alert_sort') or '').lower()
+        if sort_mode == 'desc':
+            queryset = queryset.order_by('-_alert_rank', '-id')
+        elif sort_mode == 'asc':
+            queryset = queryset.order_by('_alert_rank', '-id')
         return queryset
 
     def perform_update(self, serializer):
@@ -282,10 +298,19 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
     serializer_class = MedicationRecordSerializer
     permission_classes = [AllowAny]
 
+    def get_permissions(self):
+        # 写操作必须登录，防止匿名开具/删除
+        if self.action in ['create', 'destroy', 'cancel']:
+            return [IsAuthenticated()]
+        return [AllowAny()]
+
     def get_queryset(self):
         queryset = MedicationRecord.objects.all()
         user_id = self.request.query_params.get('user', None)
         drug_id = self.request.query_params.get('drug', None)
+        date_from = self.request.query_params.get('date_from', None)
+        date_to = self.request.query_params.get('date_to', None)
+        drug_name = (self.request.query_params.get('drug_name') or '').strip()
 
         r = _role(self.request.user) if self.request.user.is_authenticated else None
         if r in ('doctor', 'pharmacist'):
@@ -300,6 +325,12 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(user_id=user_id)
         if drug_id:
             queryset = queryset.filter(drug_id=drug_id)
+        if drug_name:
+            queryset = queryset.filter(drug__name__icontains=drug_name)
+        if date_from:
+            queryset = queryset.filter(record_time__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(record_time__date__lte=date_to)
 
         return queryset
 
@@ -307,10 +338,17 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
         """创建用药记录时自动扣除库存（事务 + 开具医师 + 审计）"""
         from .services.log_service import log_operation
         from .services.alert_service import maybe_alerts_for_drug, maybe_disease_spike_alert
+        from rest_framework.exceptions import PermissionDenied
 
         drug = serializer.validated_data['drug']
         quantity = serializer.validated_data['quantity']
         disease_name = (serializer.validated_data.get('disease_name') or '').strip()
+        rx = (serializer.validated_data.get('prescription_id') or '').strip()
+        if rx and active_medication_qs().filter(prescription_id=rx).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                'prescription_id': '每张处方仅允许开具一种药品（一条用药记录），不可在同一处方号下添加第二种药品。',
+            })
 
         today = date.today()
         if drug.expiry_date and drug.expiry_date < today:
@@ -320,7 +358,9 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
             })
 
         role = _role(self.request.user) if self.request.user.is_authenticated else None
-        prescribed_by = self.request.user if role in ('doctor', 'admin') else None
+        if role == 'admin':
+            raise PermissionDenied('管理员不可开具处方，请使用医生账号操作。')
+        prescribed_by = self.request.user if role == 'doctor' else None
 
         dept = ''
         if prescribed_by:
@@ -506,36 +546,35 @@ class AuthViewSet(viewsets.ViewSet):
             'message': '登出成功'
         })
     
-    @action(detail=False, methods=['post'], url_path='register')
-    def register(self, request):
-        """用户注册"""
-        serializer = UserRegisterSerializer(data=request.data)
-        
-        if serializer.is_valid():
-            from .services.log_service import log_operation
-
-            with transaction.atomic():
-                user = serializer.save()
-                log_operation(
-                    user=None,
-                    action_type='CREATE_USER',
-                    target_type='user',
-                    target_id=user.id,
-                    detail=f'注册新用户 {user.username}',
-                )
-            return Response({
-                'message': '注册成功',
-                'user': UserSerializer(user).data
-            }, status=status.HTTP_201_CREATED)
-        else:
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
 class UserViewSet(viewsets.ModelViewSet):
     """用户视图集（支持增删改查）"""
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [AllowAny]  # 暂时允许所有用户
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return UserCreateSerializer
+        return UserSerializer
+
+    def perform_create(self, serializer):
+        from .services.log_service import log_operation
+
+        user = serializer.save()
+        log_operation(
+            user=self.request.user,
+            action_type='CREATE_USER',
+            target_type='user',
+            target_id=user.id,
+            detail=f'管理员创建用户 {user.username}',
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        user = User.objects.select_related('profile').get(pk=serializer.instance.pk)
+        return Response(UserSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
 
     def get_queryset(self):
         """获取查询集，支持按用户名搜索"""
@@ -639,7 +678,7 @@ class DashboardViewSet(viewsets.ViewSet):
     def list(self, request):
         """首页 Dashboard：公告、政策、按角色拆分的提醒"""
         role = _role(request.user) if request.user.is_authenticated else None
-        return Response(build_home_payload(role or 'patient', request))
+        return Response(build_home_payload(role or 'doctor', request))
 
     @action(detail=False, methods=['get'], url_path='trends')
     def trends(self, request):
@@ -1064,6 +1103,56 @@ class DashboardViewSet(viewsets.ViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class AnnouncementViewSet(viewsets.ModelViewSet):
+    """
+    系统公告管理：仅管理员。
+    启用（is_active=true）的公告由工作台首页等接口读取展示。
+    """
+    queryset = Announcement.objects.all().order_by('-created_at')
+    serializer_class = AnnouncementSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def perform_create(self, serializer):
+        from .services.log_service import log_operation
+
+        obj = serializer.save()
+        log_operation(
+            user=self.request.user,
+            action_type='CREATE_ANNOUNCEMENT',
+            target_type='announcement',
+            target_id=obj.id,
+            detail=f'发布公告：{obj.title[:80]}',
+        )
+
+    def perform_update(self, serializer):
+        from .services.log_service import log_operation
+
+        obj = serializer.save()
+        log_operation(
+            user=self.request.user,
+            action_type='UPDATE_ANNOUNCEMENT',
+            target_type='announcement',
+            target_id=obj.id,
+            detail=f'更新公告：{obj.title[:80]}',
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        from .services.log_service import log_operation
+
+        instance = self.get_object()
+        tid = instance.id
+        title = (instance.title or '')[:80]
+        log_operation(
+            user=request.user,
+            action_type='DELETE_ANNOUNCEMENT',
+            target_type='announcement',
+            target_id=tid,
+            detail=f'删除公告：{title}',
+        )
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class OperationLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = OperationLog.objects.select_related('user').all()
     serializer_class = OperationLogSerializer
@@ -1073,8 +1162,12 @@ class OperationLogViewSet(viewsets.ReadOnlyModelViewSet):
         qs = super().get_queryset().order_by('-created_at')
         if at := self.request.query_params.get('action_type'):
             qs = qs.filter(action_type=at)
-        if uid := self.request.query_params.get('user_id'):
-            qs = qs.filter(user_id=uid)
+        uid = (self.request.query_params.get('user_id') or '').strip()
+        if uid:
+            if uid.isdigit():
+                qs = qs.filter(user_id=int(uid))
+            else:
+                qs = qs.filter(user__username__icontains=uid)
         if df := self.request.query_params.get('date_from'):
             qs = qs.filter(created_at__date__gte=df)
         if dr := self.request.query_params.get('date_to'):

@@ -23,6 +23,7 @@ from drugs.views import (
     MedicationRecordViewSet,
     InventoryAdjustmentViewSet,
     OperationLogViewSet,
+    AnnouncementViewSet,
     AuthViewSet,
     UserViewSet,
     DashboardViewSet,
@@ -37,6 +38,7 @@ router.register(r'auth', AuthViewSet, basename='auth')
 router.register(r'users', UserViewSet, basename='user')
 router.register(r'dashboard', DashboardViewSet, basename='dashboard')
 router.register(r'operation-logs', OperationLogViewSet, basename='operation-log')
+router.register(r'announcements', AnnouncementViewSet, basename='announcement')
 
 # 根路径视图
 def api_root(request):
@@ -50,7 +52,6 @@ def api_root(request):
             'medication_records': '/api/medication-records/',
             'auth_login': '/api/auth/login/',
             'auth_logout': '/api/auth/logout/',
-            'auth_register': '/api/auth/register/',
             'users': '/api/users/',
             'drugs_warnings': '/api/drugs/warnings/',
             'drugs_stock_in': '/api/drugs/{id}/stock-in/',
@@ -59,6 +60,7 @@ def api_root(request):
             'inventory_adjustments': '/api/inventory-adjustments/',
             'medication_cancel': '/api/medication-records/{id}/cancel/',
             'operation_logs': '/api/operation-logs/',
+            'announcements': '/api/announcements/',
             'dashboard_recommendations': '/api/dashboard/recommendations/',
             'drug_stock_trend': '/api/drugs/{id}/stock-trend/',
         }

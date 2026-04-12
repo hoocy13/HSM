@@ -103,11 +103,6 @@ export const authApi = {
     return api.post('/auth/login/', { username, password })
   },
   
-  // 注册
-  register(data) {
-    return api.post('/auth/register/', data)
-  },
-  
   // 登出
   logout() {
     return api.post('/auth/logout/')
@@ -116,6 +111,10 @@ export const authApi = {
 
 // 用户 API
 export const userApi = {
+  createUser(data) {
+    return api.post('/users/', data)
+  },
+
   // 获取用户列表
   getUsers(params = {}) {
     return api.get('/users/', { params })
@@ -191,6 +190,22 @@ export const dashboardApi = {
 export const operationLogApi = {
   list(params = {}) {
     return api.get('/operation-logs/', { params })
+  }
+}
+
+/** 系统公告（管理员） */
+export const announcementApi = {
+  list(params = {}) {
+    return api.get('/announcements/', { params })
+  },
+  create(data) {
+    return api.post('/announcements/', data)
+  },
+  patch(id, data) {
+    return api.patch(`/announcements/${id}/`, data)
+  },
+  delete(id) {
+    return api.delete(`/announcements/${id}/`)
   }
 }
 

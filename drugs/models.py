@@ -20,6 +20,13 @@ class Drug(models.Model):
     ]
     
     name = models.CharField(max_length=100, verbose_name="名称", help_text="药品名称")
+    specification = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        verbose_name="规格",
+        help_text="药品规格，如片剂/胶囊/盒装",
+    )
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default='other', verbose_name="分类", help_text="药品分类")
     stock = models.IntegerField(default=0, verbose_name="库存", help_text="药品库存数量", validators=[MinValueValidator(0)])
     cost_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="成本价格", help_text="药品成本价格（元）")
@@ -94,11 +101,10 @@ class UserProfile(models.Model):
         ('admin', '管理员'),
         ('doctor', '医生'),
         ('pharmacist', '药剂师'),
-        ('patient', '患者'),
     ]
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile', verbose_name="用户")
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='patient', verbose_name="角色")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='doctor', verbose_name="角色")
     avatar = models.URLField(max_length=500, blank=True, default='', verbose_name="头像")
     department = models.CharField(max_length=100, blank=True, default='', verbose_name="科室")
 
@@ -165,6 +171,9 @@ class OperationLog(models.Model):
         ('UPDATE_DRUG', 'UPDATE_DRUG'),
         ('CREATE_USER', 'CREATE_USER'),
         ('UPDATE_USER_ROLE', 'UPDATE_USER_ROLE'),
+        ('CREATE_ANNOUNCEMENT', 'CREATE_ANNOUNCEMENT'),
+        ('UPDATE_ANNOUNCEMENT', 'UPDATE_ANNOUNCEMENT'),
+        ('DELETE_ANNOUNCEMENT', 'DELETE_ANNOUNCEMENT'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='operation_logs')

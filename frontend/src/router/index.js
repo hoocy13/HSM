@@ -9,12 +9,6 @@ const routes = [
     meta: { requiresAuth: false }
   },
   {
-    path: '/register',
-    name: 'Register',
-    component: () => import('../views/Register.vue'),
-    meta: { requiresAuth: false }
-  },
-  {
     path: '/',
     redirect: '/layout'
   },
@@ -58,25 +52,19 @@ const routes = [
         path: 'drugs/stock-in',
         name: 'StockInHistory',
         component: () => import('../views/StockInHistory.vue'),
-        meta: { title: '入库记录', roleRequired: ['admin', 'pharmacist'] }
+        meta: { title: '入库记录', roleRequired: ['pharmacist'] }
       },
       {
         path: 'drugs/inventory',
         name: 'InventoryAdjust',
         component: () => import('../views/InventoryAdjust.vue'),
-        meta: { title: '库存盘点', roleRequired: ['admin', 'pharmacist'] }
+        meta: { title: '库存盘点', roleRequired: ['pharmacist'] }
       },
       {
         path: 'medication-records',
         name: 'MedicationRecords',
         component: () => import('../views/MedicationRecords.vue'),
-        meta: { title: '用药记录' }
-      },
-      {
-        path: 'warnings',
-        name: 'Warnings',
-        component: () => import('../views/Warnings.vue'),
-        meta: { title: '智能预警', roleRequired: ['admin'] }
+        meta: { title: '用药记录', roleRequired: ['doctor', 'pharmacist'] }
       },
       {
         path: 'users',
@@ -89,6 +77,12 @@ const routes = [
         name: 'UserPermissions',
         component: () => import('../views/UserPermissions.vue'),
         meta: { title: '权限设置', roleRequired: ['admin'] }
+      },
+      {
+        path: 'users/announcements',
+        name: 'AnnouncementManage',
+        component: () => import('../views/AnnouncementManage.vue'),
+        meta: { title: '系统公告', roleRequired: ['admin'] }
       },
       {
         path: 'operation-logs',
@@ -109,19 +103,19 @@ function defaultPathForRole(role) {
   if (role === 'admin') return '/layout/dashboard'
   if (role === 'doctor') return '/layout/drugs'
   if (role === 'pharmacist') return '/layout/dashboard'
-  return '/layout/medication-records'
+  return '/layout/dashboard'
 }
 
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('token')
   const requiresAuth = to.meta.requiresAuth !== false
 
-  let userRole = 'patient'
+  let userRole = 'doctor'
   try {
     const userStr = localStorage.getItem('user')
     if (userStr) {
       const user = JSON.parse(userStr)
-      userRole = user.role || 'patient'
+      userRole = user.role || 'doctor'
     }
   } catch (e) {
     console.error('解析用户信息失败:', e)

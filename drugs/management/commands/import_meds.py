@@ -197,7 +197,7 @@ class Command(BaseCommand):
 
         departments = ['内科', '外科', '儿科', '呼吸科', '心内科', '内分泌科']
 
-        def ensure_user(username, role='patient', department=''):
+        def ensure_user(username, role='doctor', department=''):
             user, created = User.objects.get_or_create(
                 username=username,
                 defaults={'email': f'{username}@example.com'}
@@ -212,7 +212,7 @@ class Command(BaseCommand):
             return user
 
         # 创建/确保一批用户（病人+医生+药剂师，按科室分配）
-        patients = [ensure_user(f'patient_{i}', role='patient', department=random.choice(departments)) for i in range(1, 21)]
+        demo_users = [ensure_user(f'demo_user_{i}', role='doctor', department=random.choice(departments)) for i in range(1, 21)]
         doctors = [ensure_user(f'doctor_{dept}', role='doctor', department=dept) for dept in departments]
         pharmacists = [ensure_user(f'pharmacist_{dept}', role='pharmacist', department=dept) for dept in departments]
 
@@ -347,7 +347,7 @@ class Command(BaseCommand):
                 prescription_counter += 1
                 
                 # 随机选择患者与开方医生（决定科室隔离字段）
-                user = random.choice(patients) if patients else random.choice(users)
+                user = random.choice(demo_users) if demo_users else random.choice(users)
                 doctor = random.choice(doctors) if doctors else None
                 dept = (doctor.profile.department if doctor and hasattr(doctor, 'profile') else '') or ''
                 disease_name = infer_disease(pair_drugs[0].name, record_date)
@@ -409,7 +409,7 @@ class Command(BaseCommand):
             prescription_counter += 1
             
             # 随机选择患者与开方医生
-            user = random.choice(patients) if patients else random.choice(users)
+            user = random.choice(demo_users) if demo_users else random.choice(users)
             doctor = random.choice(doctors) if doctors else None
             dept = (doctor.profile.department if doctor and hasattr(doctor, 'profile') else '') or ''
             

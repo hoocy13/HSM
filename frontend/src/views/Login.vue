@@ -52,13 +52,6 @@
             </el-button>
           </el-form-item>
           
-          <el-form-item>
-            <div class="register-link">
-              <span>还没有账号？</span>
-              <el-link type="primary" @click="goToRegister" class="link-text">立即注册</el-link>
-            </div>
-          </el-form-item>
-          
         </el-form>
       </div>
     </div>
@@ -108,13 +101,13 @@ const handleLogin = async () => {
           
           ElMessage.success('登录成功')
           
-          const userRole = response.data.user.role || 'patient'
+          const userRole = response.data.user.role || 'doctor'
           if (userRole === 'admin' || userRole === 'pharmacist') {
             router.push('/layout/dashboard')
           } else if (userRole === 'doctor') {
             router.push('/layout/drugs')
           } else {
-            router.push('/layout/medication-records')
+            router.push('/layout/dashboard')
           }
         } else {
           ElMessage.error('登录失败：未收到 token')
@@ -129,9 +122,6 @@ const handleLogin = async () => {
   })
 }
 
-const goToRegister = () => {
-  router.push('/register')
-}
 </script>
 
 <style scoped>
@@ -297,20 +287,6 @@ const goToRegister = () => {
 
 .login-button:active {
   transform: translateY(0);
-}
-
-/* 注册链接 */
-.register-link {
-  width: 100%;
-  text-align: center;
-  color: #526d82;
-  font-size: 14px;
-}
-
-.link-text {
-  color: #1e3c72;
-  font-weight: 600;
-  text-decoration: underline;
 }
 
 /* 响应式设计 */

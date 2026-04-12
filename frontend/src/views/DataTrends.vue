@@ -15,7 +15,10 @@
       </div>
     </el-card>
     <el-card>
-      <template #header>用药趋势（按日记录量）</template>
+      <template #header>
+        <span>用药趋势（按日记录量）</span>
+        <span class="hint">点击折线数据点可查看当日全部用药记录</span>
+      </template>
       <div ref="lineRef" style="width: 100%; height: 380px;"></div>
     </el-card>
     <el-card style="margin-top: 20px;">
@@ -26,6 +29,22 @@
       <template #header>药品关联矩阵（热力图）</template>
       <div ref="heatRef" style="width: 100%; height: 480px;"></div>
     </el-card>
+
+    <el-dialog v-model="dayDialogVisible" :title="dayDialogTitle" width="900px" destroy-on-close>
+      <el-table :data="dayRecords" v-loading="dayRecordsLoading" stripe max-height="480">
+        <el-table-column prop="id" label="记录ID" width="90" />
+        <el-table-column prop="prescription_id" label="处方号" width="140" show-overflow-tooltip />
+        <el-table-column prop="drug_name" label="药品" min-width="120" />
+        <el-table-column prop="disease_name" label="疾病/诊断" width="120" show-overflow-tooltip />
+        <el-table-column label="用户" width="100">
+          <template #default="{ row }">{{ row.user?.username || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="quantity" label="数量" width="70" align="center" />
+        <el-table-column prop="record_time" label="记录时间" width="170">
+          <template #default="{ row }">{{ formatRowTime(row.record_time) }}</template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -33,7 +52,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
-import { dashboardApi } from '../api/drugs.js'
+import { dashboardApi, medicationApi } from '../api/drugs.js'
 
 const lineRef = ref(null)
 const diseaseRef = ref(null)
@@ -42,6 +61,51 @@ let lineChart = null
 let diseaseChart = null
 let heatChart = null
 const days = ref(30)
+
+const dayDialogVisible = ref(false)
+const dayDialogTitle = ref('')
+const dayRecords = ref([])
+const dayRecordsLoading = ref(false)
+
+const BAR_COLORS = [
+  '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc'
+]
+
+const formatRowTime = (s) => {
+  if (!s) return '-'
+  return new Date(s).toLocaleString('zh-CN')
+}
+
+const openDayRecords = async (dateStr) => {
+  dayDialogTitle.value = `${dateStr} 的用药记录`
+  dayDialogVisible.value = true
+  dayRecordsLoading.value = true
+  dayRecords.value = []
+  try {
+    const { data } = await medicationApi.getRecords({
+      date_from: dateStr,
+      date_to: dateStr,
+      page_size: 500
+    })
+    dayRecords.value = data.results || []
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载当日记录失败')
+  } finally {
+    dayRecordsLoading.value = false
+  }
+}
+
+const bindLineClick = () => {
+  if (!lineChart) return
+  lineChart.off('click')
+  lineChart.on('click', (params) => {
+    const dateStr = params?.name
+    if (dateStr && typeof dateStr === 'string') {
+      openDayRecords(dateStr)
+    }
+  })
+}
 
 const load = async () => {
   try {
@@ -71,6 +135,7 @@ const load = async () => {
           }
         ]
       })
+      bindLineClick()
     }
 
     if (diseaseRef.value) {
@@ -89,8 +154,10 @@ const load = async () => {
           {
             name: '记录数',
             type: 'bar',
-            data: dlist.map((x) => x.count),
-            itemStyle: { color: '#67c23a' }
+            data: dlist.map((x, i) => ({
+              value: x.count,
+              itemStyle: { color: BAR_COLORS[i % BAR_COLORS.length] }
+            }))
           }
         ]
       })
@@ -199,5 +266,11 @@ onUnmounted(() => {
 .filter-title {
   font-weight: 600;
   color: #303133;
+}
+.hint {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #909399;
+  font-weight: normal;
 }
 </style>

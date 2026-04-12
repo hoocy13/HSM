@@ -215,7 +215,7 @@ const buildGraph = (dm) => {
         name,
         value: d,
         symbolSize: size,
-        category: stableHash(name) % palette.length,
+        category: 0,
         label: {
           show: topByDeg.has(idx),
           color: 'rgba(235, 245, 255, 0.92)',
@@ -239,6 +239,7 @@ const buildGraph = (dm) => {
     })
 
     const maxW = Math.max(1, ...picked.map((l) => l.value))
+    const showEdgeNames = picked.length <= 80
     const graphLinks = picked.map((l) => ({
       source: String(l.source),
       target: String(l.target),
@@ -247,6 +248,14 @@ const buildGraph = (dm) => {
         width: 0.6 + 3.6 * (l.value / maxW),
         opacity: 0.10 + 0.55 * (l.value / maxW),
       },
+      label: showEdgeNames
+        ? {
+            show: true,
+            fontSize: 9,
+            color: 'rgba(220, 235, 255, 0.92)',
+            formatter: `${labels[l.source]} ↔ ${labels[l.target]}\n×${l.value}`,
+          }
+        : { show: false },
     }))
 
     centerSummary.value = {
@@ -324,7 +333,7 @@ const buildGraph = (dm) => {
       name,
       value: d,
       symbolSize: isCenter ? Math.max(size + 12, 44) : size,
-      category: stableHash(name) % palette.length,
+      category: 0,
       label: {
         show: isCenter ? true : size >= 26,
         color: 'rgba(235, 245, 255, 0.92)',
@@ -356,6 +365,12 @@ const buildGraph = (dm) => {
       width: 0.8 + 4.2 * (l.value / maxW),
       opacity: 0.18 + 0.55 * (l.value / maxW),
     },
+    label: {
+      show: true,
+      fontSize: 10,
+      color: 'rgba(220, 235, 255, 0.95)',
+      formatter: `${labels[l.source]} ↔ ${labels[l.target]}\n×${l.value}`,
+    },
   }))
 
   // 右侧“Top 关联”列表
@@ -374,6 +389,7 @@ const render = () => {
   if (!chart) chart = echarts.init(graphRef.value, null, { renderer: 'canvas' })
 
   const { nodes, links } = buildGraph(rawMatrix)
+  const labels = rawMatrix.labels || []
   if (!nodes.length) {
     chart.setOption({
       backgroundColor: '#071126',
@@ -387,7 +403,7 @@ const render = () => {
     return
   }
 
-  const categories = palette.map((c, i) => ({ name: `组${i + 1}`, itemStyle: { color: c } }))
+  const categories = [{ name: '药品（颜色区分节点；连线为处方共现）', itemStyle: { color: palette[0] } }]
 
   chart.setOption({
     backgroundColor: {
@@ -408,25 +424,16 @@ const render = () => {
       textStyle: { color: '#e6f0ff' },
       formatter: (p) => {
         if (p.dataType === 'edge') {
-          return `<div style="font-weight:600;margin-bottom:4px;">关联强度</div>${p.data.source} ↔ ${p.data.target}<br/>共现: <b>${p.data.value}</b>`
+          const si = Number(p.data.source)
+          const ti = Number(p.data.target)
+          const a = labels[si] || p.data.source
+          const b = labels[ti] || p.data.target
+          return `<div style="font-weight:600;margin-bottom:4px;">关联强度</div>${a} ↔ ${b}<br/>共现: <b>${p.data.value}</b>`
         }
         return `<div style="font-weight:600;margin-bottom:4px;">${p.data.name}</div>节点热度: <b>${p.data.value}</b>`
       }
     },
-    legend: [
-      {
-        show: true,
-        top: 10,
-        left: 10,
-        orient: 'vertical',
-        textStyle: { color: 'rgba(214, 228, 255, 0.8)', fontSize: 11 },
-        itemWidth: 10,
-        itemHeight: 10,
-        inactiveColor: 'rgba(255,255,255,0.16)',
-        selectedMode: false,
-        data: categories.map((c) => c.name),
-      }
-    ],
+    legend: { show: false },
     toolbox: {
       show: true,
       right: 12,

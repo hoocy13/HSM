@@ -19,6 +19,7 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
+        <el-button type="primary" @click="handleAdd">添加用户</el-button>
       </div>
       
       <div class="table-wrapper">
@@ -99,6 +100,9 @@
             :disabled="isEdit"
           />
         </el-form-item>
+        <el-form-item v-if="!isEdit" label="初始密码" prop="password">
+          <el-input v-model="formData.password" type="password" placeholder="至少 6 位" show-password />
+        </el-form-item>
         <el-form-item label="邮箱" prop="email">
           <el-input
             v-model="formData.email"
@@ -133,7 +137,6 @@
             <el-option label="管理员" value="admin" />
             <el-option label="医生" value="doctor" />
             <el-option label="药剂师" value="pharmacist" />
-            <el-option label="患者" value="patient" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -167,20 +170,20 @@ const isEdit = ref(false)
 const editingUserId = ref(null)
 const formData = reactive({
   username: '',
+  password: '',
   email: '',
   first_name: '',
   last_name: '',
   avatar: '',
   department: '',
-  role: 'patient'
+  role: 'doctor'
 })
 
 const roleLabel = (r) =>
   ({
     admin: '管理员',
     doctor: '医生',
-    pharmacist: '药剂师',
-    patient: '患者'
+    pharmacist: '药剂师'
   }[r] || r)
 
 // 响应式对话框宽度
@@ -200,6 +203,16 @@ const formRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 30, message: '用户名长度在 3 到 30 个字符', trigger: 'blur' }
+  ],
+  password: [
+    {
+      validator: (_r, v, cb) => {
+        if (!isEdit.value && (!v || String(v).length < 6)) {
+          cb(new Error('新增用户时密码至少 6 位'))
+        } else cb()
+      },
+      trigger: 'blur'
+    }
   ],
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
@@ -248,16 +261,31 @@ const handlePageChange = (page) => {
   fetchUsers()
 }
 
+const handleAdd = () => {
+  isEdit.value = false
+  editingUserId.value = null
+  formData.username = ''
+  formData.password = ''
+  formData.email = ''
+  formData.first_name = ''
+  formData.last_name = ''
+  formData.avatar = ''
+  formData.department = ''
+  formData.role = 'doctor'
+  dialogVisible.value = true
+}
+
 const handleEdit = (row) => {
   isEdit.value = true
   editingUserId.value = row.id
   formData.username = row.username
+  formData.password = ''
   formData.email = row.email || ''
   formData.first_name = row.first_name || ''
   formData.last_name = row.last_name || ''
   formData.avatar = row.avatar || ''
   formData.department = row.department || ''
-  formData.role = row.role || 'patient'
+  formData.role = row.role || 'doctor'
   dialogVisible.value = true
 }
 
@@ -268,7 +296,6 @@ const handleSubmit = async () => {
     if (valid) {
       try {
         if (isEdit.value) {
-          // 更新用户
           const response = await userApi.updateUser(editingUserId.value, {
             username: formData.username,
             email: formData.email,
@@ -278,18 +305,24 @@ const handleSubmit = async () => {
             avatar_write: formData.avatar,
             department_write: formData.department
           })
-          console.log('更新响应数据:', response.data)
           ElMessage.success('更新成功')
-          
-          // 立即更新列表中的用户数据
           const updatedUser = response.data
-          console.log('更新后的用户角色:', updatedUser.role)
           const index = userList.value.findIndex(u => u.id === updatedUser.id)
           if (index !== -1) {
-            // 使用 Vue 3 的响应式更新方式，创建新对象
             userList.value[index] = { ...userList.value[index], ...updatedUser }
-            console.log('列表更新后的用户数据:', userList.value[index])
           }
+        } else {
+          await userApi.createUser({
+            username: formData.username,
+            password: formData.password,
+            email: formData.email,
+            first_name: formData.first_name,
+            last_name: formData.last_name,
+            role_write: formData.role,
+            department_write: formData.department,
+            avatar_write: formData.avatar
+          })
+          ElMessage.success('用户已创建')
         }
         dialogVisible.value = false
         // 强制重新获取用户列表以确保数据同步
@@ -315,12 +348,13 @@ const resetForm = () => {
   isEdit.value = false
   editingUserId.value = null
   formData.username = ''
+  formData.password = ''
   formData.email = ''
   formData.first_name = ''
   formData.last_name = ''
   formData.avatar = ''
   formData.department = ''
-  formData.role = 'patient'
+  formData.role = 'doctor'
 }
 
 onMounted(() => {
@@ -343,6 +377,10 @@ onMounted(() => {
 .toolbar {
   margin-bottom: 20px;
   width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
 }
 
 .table-wrapper {

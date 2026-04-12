@@ -25,6 +25,7 @@ defineProps({
 
 <style scoped>
 .widget-card {
-  margin-top: 16px;
+  margin-top: 0;
+  height: 100%;
 }
 </style>

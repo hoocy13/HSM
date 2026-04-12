@@ -4,10 +4,6 @@
       <template #header>
         <div class="card-header">
           <span>药品管理</span>
-          <el-button type="warning" @click="showWarnings">
-            <el-icon><Warning /></el-icon>
-            查看预警
-          </el-button>
         </div>
       </template>
       
@@ -45,9 +41,13 @@
           style="width: 100%"
           stripe
           :row-class-name="getRowClassName"
+          @sort-change="handleSortChange"
         >
         <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="name" label="名称" />
+        <el-table-column prop="name" label="名称" min-width="120" />
+        <el-table-column prop="specification" label="规格" width="100" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.specification || '—' }}</template>
+        </el-table-column>
         <el-table-column prop="stock" label="库存" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="getStockTagType(row.stock)" size="small">
@@ -63,7 +63,14 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="预警状态" width="120" align="center">
+        <el-table-column
+          prop="alert_rank"
+          label="预警状态"
+          width="130"
+          align="center"
+          sortable="custom"
+          column-key="alert"
+        >
           <template #default="{ row }">
             <el-tag v-if="row.is_expiring_soon" type="danger" size="small">即将过期</el-tag>
             <el-tag v-else-if="row.is_low_stock" type="warning" size="small">库存不足</el-tag>
@@ -139,6 +146,15 @@
             show-word-limit
           />
         </el-form-item>
+        <el-form-item label="规格" prop="specification">
+          <el-input
+            v-model="formData.specification"
+            placeholder="如：0.5g×12片/盒（选填）"
+            maxlength="50"
+            show-word-limit
+            clearable
+          />
+        </el-form-item>
         <el-form-item label="库存" prop="stock">
           <el-input-number
             v-model="formData.stock"
@@ -172,8 +188,8 @@
         <el-form-item label="效期预警(天)" prop="expiry_warning_days">
           <el-input-number v-model="formData.expiry_warning_days" :min="1" :max="365" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="所属科室">
-          <el-input v-model="formData.department" placeholder="空=全院共用" clearable />
+        <el-form-item label="所属科室" prop="department">
+          <el-input v-model="formData.department" placeholder="请输入所属科室，如：内科" clearable />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -254,45 +270,13 @@
     <el-dialog v-model="stockTrendVisible" title="库存变化轨迹" width="720px" @opened="renderTrendChart">
       <div ref="trendChartRef" style="width: 100%; height: 380px;"></div>
     </el-dialog>
-    
-    <!-- 预警对话框 -->
-    <el-dialog
-      v-model="warningsDialogVisible"
-      title="药品预警"
-      :width="warningDialogWidth"
-    >
-      <el-table :data="warningDrugs" stripe>
-        <el-table-column prop="name" label="药品名称" />
-        <el-table-column prop="stock" label="库存" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getStockTagType(row.stock)" size="small">
-              {{ row.stock }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="expiry_date" label="有效期" width="120" align="center">
-          <template #default="{ row }">
-            <span v-if="row.expiry_date" :class="{ 'warning-text': row.is_expiring_soon }">
-              {{ formatDateOnly(row.expiry_date) }}
-            </span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="预警原因" width="200">
-          <template #default="{ row }">
-            <el-tag v-if="row.is_expiring_soon" type="danger" size="small">即将过期</el-tag>
-            <el-tag v-if="row.is_low_stock" type="warning" size="small">库存不足</el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Plus, Warning } from '@element-plus/icons-vue'
+import { Search, Plus } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { drugApi, inventoryApi } from '../api/drugs.js'
 
@@ -303,8 +287,8 @@ const searchName = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
-const warningDrugs = ref([])
-const userRole = ref('patient')
+const userRole = ref('doctor')
+const alertSort = ref('')
 
 // 响应式对话框宽度
 const dialogWidth = computed(() => {
@@ -314,16 +298,6 @@ const dialogWidth = computed(() => {
     return '70%'
   }
   return '500px'
-})
-
-// 预警对话框宽度（需要更宽）
-const warningDialogWidth = computed(() => {
-  if (window.innerWidth <= 768) {
-    return '95%'
-  } else if (window.innerWidth <= 1200) {
-    return '85%'
-  }
-  return '900px'
 })
 
 // 对话框
@@ -348,13 +322,13 @@ const trendChartRef = ref(null)
 const trendDrugId = ref(null)
 let trendChart = null
 
-const warningsDialogVisible = ref(false)
 const dialogTitle = ref('添加药品')
 const formRef = ref(null)
 const stockInFormRef = ref(null)
 const formData = reactive({
   id: null,
   name: '',
+  specification: '',
   stock: 0,
   cost_price: 0,
   expiry_date: null,
@@ -374,7 +348,24 @@ const stockInForm = reactive({
 const formRules = {
   name: [
     { required: true, message: '请输入药品名称', trigger: 'blur' },
-    { min: 1, max: 100, message: '长度在 1 到 100 个字符', trigger: 'blur' }
+    { min: 1, max: 100, message: '长度在 1 到 100 个字符', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!(value || '').trim()) callback(new Error('药品名称不能为空'))
+        else callback()
+      },
+      trigger: 'blur'
+    }
+  ],
+  department: [
+    { required: true, message: '请输入所属科室', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!(value || '').trim()) callback(new Error('所属科室不能为空'))
+        else callback()
+      },
+      trigger: 'blur'
+    }
   ],
   stock: [
     { required: true, message: '请输入库存数量', trigger: 'blur' },
@@ -401,7 +392,10 @@ const fetchDrugs = async () => {
     if (searchName.value) {
       params.name = searchName.value
     }
-    
+    if (alertSort.value) {
+      params.alert_sort = alertSort.value
+    }
+
     const response = await drugApi.getDrugs(params)
     drugList.value = response.data.results || []
     total.value = response.data.count || 0
@@ -413,15 +407,13 @@ const fetchDrugs = async () => {
   }
 }
 
-// 获取预警药品
-const fetchWarnings = async () => {
-  try {
-    const response = await drugApi.getWarnings()
-    warningDrugs.value = response.data.results || []
-  } catch (error) {
-    console.error('获取预警药品失败:', error)
-    ElMessage.error('获取预警药品失败: ' + (error.response?.data?.detail || error.message))
-  }
+const handleSortChange = ({ column, order }) => {
+  if (column?.columnKey !== 'alert' && column?.property !== 'alert_rank') return
+  if (order === 'descending') alertSort.value = 'desc'
+  else if (order === 'ascending') alertSort.value = 'asc'
+  else alertSort.value = ''
+  currentPage.value = 1
+  fetchDrugs()
 }
 
 // 搜索
@@ -479,6 +471,7 @@ const handleAdd = () => {
   dialogTitle.value = '添加药品'
   formData.id = null
   formData.name = ''
+  formData.specification = ''
   formData.stock = 0
   formData.cost_price = 0
   formData.expiry_date = null
@@ -493,6 +486,7 @@ const handleEdit = (row) => {
   dialogTitle.value = '编辑药品'
   formData.id = row.id
   formData.name = row.name
+  formData.specification = row.specification || ''
   formData.stock = row.stock
   formData.cost_price = row.cost_price || 0
   formData.expiry_date = row.expiry_date
@@ -596,12 +590,6 @@ const submitInventory = async () => {
   })
 }
 
-// 显示预警
-const showWarnings = async () => {
-  await fetchWarnings()
-  warningsDialogVisible.value = true
-}
-
 // 提交表单
 const handleSubmit = async () => {
   if (!formRef.value) return
@@ -610,13 +598,14 @@ const handleSubmit = async () => {
     if (valid) {
       try {
         const data = {
-          name: formData.name,
+          name: (formData.name || '').trim(),
+          specification: (formData.specification || '').trim(),
           stock: formData.stock,
           cost_price: formData.cost_price,
           expiry_date: formData.expiry_date,
           min_stock: formData.min_stock,
           expiry_warning_days: formData.expiry_warning_days,
-          department: formData.department || ''
+          department: (formData.department || '').trim()
         }
         
         if (formData.id) {
@@ -643,6 +632,7 @@ const resetForm = () => {
   }
   formData.id = null
   formData.name = ''
+  formData.specification = ''
   formData.stock = 0
   formData.cost_price = 0
   formData.expiry_date = null
@@ -699,7 +689,7 @@ onMounted(() => {
     const userStr = localStorage.getItem('user')
     if (userStr) {
       const user = JSON.parse(userStr)
-      userRole.value = user.role || 'patient'
+      userRole.value = user.role || 'doctor'
     }
   } catch (e) {
     console.error('解析用户信息失败:', e)
