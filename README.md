@@ -42,8 +42,8 @@ python manage.py create_admin
 
 # 4. （可选）导入药品并生成演示数据
 # - 默认只要有药品数据即可生成用药记录、库存流水与预警
-# - 支持覆盖到指定日期（示例覆盖到 2026-04-10）
-python manage.py import_meds --skip-drugs --reset-enhancements --start-date 2025-08-01 --end-date 2026-04-10
+# - 支持覆盖到指定日期（示例覆盖到 2026-05-15）
+python manage.py import_meds --skip-drugs --reset-enhancements --start-date 2025-08-01 --end-date 2026-05-15
 
 # 5. 开启后端服务
 python manage.py runserver
@@ -95,12 +95,12 @@ npm run dev
 python manage.py import_meds --file meds.csv
 ```
 
-### 2) 生成/重置演示数据（覆盖到 2026-04-10）
+### 2) 生成/重置演示数据（覆盖到 2026-05-15）
 
 会清理并重建：`MedicationRecord`、`InventoryAdjustment`、`Alert`、`OperationLog`，并重置库存，适合反复演示。
 
 ```bash
-python manage.py import_meds --skip-drugs --reset-enhancements --start-date 2025-08-01 --end-date 2026-04-10
+python manage.py import_meds --skip-drugs --reset-enhancements --start-date 2025-08-01 --end-date 2026-5-15
 ```
 
 ### 3) 演示账号
