@@ -13,6 +13,8 @@
         <el-option label="发布公告" value="CREATE_ANNOUNCEMENT" />
         <el-option label="更新公告" value="UPDATE_ANNOUNCEMENT" />
         <el-option label="删除公告" value="DELETE_ANNOUNCEMENT" />
+        <el-option label="审批发药" value="APPROVE_DISPENSE" />
+        <el-option label="拒绝待发药" value="REJECT_DISPENSE" />
       </el-select>
       <el-input v-model="filterUserId" placeholder="用户名或用户ID" clearable style="width: 200px" />
       <el-date-picker v-model="dateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" />

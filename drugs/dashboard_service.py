@@ -13,8 +13,9 @@ from .models import Drug, MedicationRecord, Announcement, Policy, Alert
 from .permissions import _role
 
 
-def _active_medication_qs():
-    return MedicationRecord.objects.filter(status='ACTIVE')
+def _fulfilled_medication_qs():
+    """仅统计已发药（扣过库存）的记录，用于趋势与推荐。"""
+    return MedicationRecord.objects.filter(status='ACTIVE', dispense_status='dispensed')
 
 def _parse_date(s: str):
     if not s:
@@ -181,7 +182,7 @@ def build_trends_payload(request=None):
     """prescription_trend、drug_matrix 与原先一致；新增 disease_trend。"""
     start_date, end_date = _get_window_from_request(request, default_days=30)
 
-    med = _active_medication_qs().filter(record_time__date__gte=start_date, record_time__date__lte=end_date)
+    med = _fulfilled_medication_qs().filter(record_time__date__gte=start_date, record_time__date__lte=end_date)
     med = _scope_med_qs(med, request)
 
     rows = (
@@ -213,7 +214,7 @@ def build_trends_payload(request=None):
     n = len(id_list)
     matrix = [[0 for _ in range(n)] for _ in range(n)]
     if n >= 2:
-        rx_med = _active_medication_qs()
+        rx_med = _fulfilled_medication_qs()
         rx_med = _scope_med_qs(rx_med, request)
         rx_map = defaultdict(set)
         for row in rx_med.exclude(prescription_id='').values('prescription_id', 'drug_id'):
@@ -245,7 +246,7 @@ def build_trends_payload(request=None):
 
 
 def build_recommendations_payload(request=None):
-    rx_med = _active_medication_qs()
+    rx_med = _fulfilled_medication_qs()
     rx_med = _scope_med_qs(rx_med, request)
     drug_ids = list(rx_med.exclude(prescription_id='').values_list('drug_id', flat=True).distinct())
     bulk = Drug.objects.in_bulk(drug_ids)

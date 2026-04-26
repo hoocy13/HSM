@@ -11,7 +11,7 @@
         <el-input
           v-model="searchName"
           placeholder="搜索用户名"
-          style="width: 300px"
+          style="width: 240px"
           clearable
           @input="handleSearch"
         >
@@ -19,6 +19,25 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
+        <el-input
+          v-model="filterDepartment"
+          placeholder="筛选科室"
+          style="width: 180px"
+          clearable
+          @input="handleSearch"
+        />
+        <el-select
+          v-model="filterRole"
+          placeholder="筛选角色"
+          style="width: 160px"
+          clearable
+          @change="handleSearch"
+        >
+          <el-option label="管理员" value="admin" />
+          <el-option label="医生" value="doctor" />
+          <el-option label="药剂师" value="pharmacist" />
+        </el-select>
+        <el-button @click="resetFilters">重置筛选</el-button>
         <el-button type="primary" @click="handleAdd">添加用户</el-button>
       </div>
       
@@ -43,6 +62,13 @@
         </el-table-column>
         <el-table-column prop="email" label="邮箱" />
         <el-table-column prop="department" label="科室" width="120" />
+        <el-table-column prop="is_active" label="账号状态" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
+              {{ row.is_active ? '启用' : '停用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="role" label="角色" width="120" align="center">
           <template #default="{ row }">
             <el-tag
@@ -53,7 +79,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button
               type="primary"
@@ -61,6 +87,14 @@
               @click="handleEdit(row)"
             >
               编辑
+            </el-button>
+            <el-button
+              :type="row.is_active ? 'warning' : 'success'"
+              size="small"
+              plain
+              @click="handleToggleActive(row)"
+            >
+              {{ row.is_active ? '停用' : '启用' }}
             </el-button>
           </template>
         </el-table-column>
@@ -152,16 +186,19 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { userApi } from '../api/drugs.js'
 
 const userList = ref([])
 const loading = ref(false)
 const searchName = ref('')
+const filterDepartment = ref('')
+const filterRole = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const currentUserId = ref(null)
 
 // 对话框
 const dialogVisible = ref(false)
@@ -231,6 +268,12 @@ const fetchUsers = async () => {
     if (searchName.value) {
       params.username = searchName.value
     }
+    if ((filterDepartment.value || '').trim()) {
+      params.department = filterDepartment.value.trim()
+    }
+    if (filterRole.value) {
+      params.role = filterRole.value
+    }
     
     const response = await userApi.getUsers(params)
     // 使用新数组确保Vue响应式更新
@@ -246,6 +289,14 @@ const fetchUsers = async () => {
 }
 
 const handleSearch = () => {
+  currentPage.value = 1
+  fetchUsers()
+}
+
+const resetFilters = () => {
+  searchName.value = ''
+  filterDepartment.value = ''
+  filterRole.value = ''
   currentPage.value = 1
   fetchUsers()
 }
@@ -287,6 +338,47 @@ const handleEdit = (row) => {
   formData.department = row.department || ''
   formData.role = row.role || 'doctor'
   dialogVisible.value = true
+}
+
+const handleToggleActive = async (row) => {
+  if (row.id === currentUserId.value && row.is_active) {
+    ElMessage.warning('不可停用当前登录账号')
+    return
+  }
+  const targetAction = row.is_active ? '停用' : '启用'
+  try {
+    await ElMessageBox.confirm(
+      `确定${targetAction}员工「${row.username}」账号吗？员工资料会保留。`,
+      `${targetAction}确认`,
+      {
+        confirmButtonText: `确定${targetAction}`,
+        cancelButtonText: '取消',
+        type: row.is_active ? 'warning' : 'info'
+      }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    if (row.is_active) {
+      await userApi.deactivateUser(row.id)
+      ElMessage.success('已停用')
+    } else {
+      await userApi.activateUser(row.id)
+      ElMessage.success('已启用')
+    }
+    await fetchUsers()
+  } catch (error) {
+    console.error('操作失败:', error)
+    const msg = error.response?.data
+    if (typeof msg === 'object') {
+      const first = Object.values(msg)[0]
+      ElMessage.error(Array.isArray(first) ? first[0] : first)
+    } else {
+      ElMessage.error(msg || '操作失败')
+    }
+  }
 }
 
 const handleSubmit = async () => {
@@ -358,6 +450,12 @@ const resetForm = () => {
 }
 
 onMounted(() => {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    currentUserId.value = Number(user.id || 0) || null
+  } catch (_e) {
+    currentUserId.value = null
+  }
   fetchUsers()
 })
 </script>

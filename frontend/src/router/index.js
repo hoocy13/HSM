@@ -46,7 +46,7 @@ const routes = [
         path: 'drugs',
         name: 'Drugs',
         component: () => import('../views/DrugList.vue'),
-        meta: { title: '药品列表', roleRequired: ['admin', 'doctor', 'pharmacist'] }
+        meta: { title: '药品列表', roleRequired: ['pharmacist'] }
       },
       {
         path: 'drugs/stock-in',
@@ -64,7 +64,13 @@ const routes = [
         path: 'medication-records',
         name: 'MedicationRecords',
         component: () => import('../views/MedicationRecords.vue'),
-        meta: { title: '用药记录', roleRequired: ['doctor', 'pharmacist'] }
+        meta: { title: '用药记录', roleRequired: ['doctor'] }
+      },
+      {
+        path: 'dispense-approve',
+        name: 'DispenseApprove',
+        component: () => import('../views/DispenseApprove.vue'),
+        meta: { title: '审批发药', roleRequired: ['pharmacist'] }
       },
       {
         path: 'users',
@@ -101,7 +107,7 @@ const router = createRouter({
 
 function defaultPathForRole(role) {
   if (role === 'admin') return '/layout/dashboard'
-  if (role === 'doctor') return '/layout/drugs'
+  if (role === 'doctor') return '/layout/dashboard'
   if (role === 'pharmacist') return '/layout/dashboard'
   return '/layout/dashboard'
 }

@@ -69,7 +69,9 @@ def maybe_disease_spike_alert(disease_name: str, department: str = ''):
     today = timezone.now().date()
     cur_start = today - timedelta(days=7)
     prev_start = today - timedelta(days=14)
-    base = MedicationRecord.objects.filter(status='ACTIVE', disease_name=disease_name.strip())
+    base = MedicationRecord.objects.filter(
+        status='ACTIVE', dispense_status='dispensed', disease_name=disease_name.strip()
+    )
     if department:
         base = base.filter(department=department)
     cur = base.filter(record_time__date__gte=cur_start).count()

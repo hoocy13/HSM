@@ -95,9 +95,10 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name',
-            'role', 'role_write', 'avatar', 'department', 'avatar_write', 'department_write',
+            'role', 'role_write', 'avatar', 'department', 'is_active',
+            'avatar_write', 'department_write',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'is_active']
 
     def get_avatar(self, obj):
         try:
@@ -188,7 +189,11 @@ class UserCreateSerializer(serializers.ModelSerializer):
         user = User.objects.create_user(**validated_data)
         user.set_password(password)
         user.save()
-        UserProfile.objects.create(user=user, role=role, department=department, avatar=avatar)
+        # post_save 信号可能已创建 UserProfile，不可再 create，否则 OneToOne 冲突
+        UserProfile.objects.update_or_create(
+            user=user,
+            defaults={'role': role, 'department': department, 'avatar': avatar},
+        )
         return user
 
 
@@ -197,7 +202,9 @@ class MedicationRecordSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     drug_name = serializers.CharField(source='drug.name', read_only=True)
     prescribed_by = UserSerializer(read_only=True)
+    dispensed_by = UserSerializer(read_only=True, allow_null=True)
     record_time = serializers.DateTimeField(required=False, default=timezone.now)
+    patient_user_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = MedicationRecord
@@ -205,8 +212,13 @@ class MedicationRecordSerializer(serializers.ModelSerializer):
             'id', 'user', 'drug', 'drug_name', 'prescription_id', 'quantity',
             'record_time', 'notes', 'status', 'prescribed_by',
             'disease_name', 'department', 'cancelled_at',
+            'dispense_status', 'dispensed_at', 'dispensed_by',
+            'patient_user_id',
         ]
-        read_only_fields = ['id', 'status', 'department', 'cancelled_at']
+        read_only_fields = [
+            'id', 'status', 'department', 'cancelled_at',
+            'dispense_status', 'dispensed_at', 'dispensed_by',
+        ]
     
     def validate_prescription_id(self, value):
         """验证处方号"""

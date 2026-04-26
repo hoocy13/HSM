@@ -14,7 +14,7 @@ def build_stock_trend(drug_id: int):
         )
 
     for mr in MedicationRecord.objects.filter(drug_id=drug_id):
-        if mr.status == 'ACTIVE':
+        if mr.status == 'ACTIVE' and mr.dispense_status == 'dispensed':
             events.append(
                 {'t': timezone.localtime(mr.record_time), 'delta': -mr.quantity, 'reason': '处方出库'}
             )

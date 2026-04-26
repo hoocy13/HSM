@@ -34,21 +34,21 @@
           <el-menu-item index="/layout/data-relations">关联关系图</el-menu-item>
         </el-sub-menu>
 
-        <el-sub-menu
-          v-if="userRole === 'admin' || userRole === 'doctor' || userRole === 'pharmacist'"
-          index="sub-drugs"
-        >
+        <el-sub-menu v-if="userRole === 'pharmacist'" index="sub-drugs">
           <template #title>
             <el-icon><Goods /></el-icon>
             <span>药品管理</span>
           </template>
           <el-menu-item index="/layout/drugs">药品列表</el-menu-item>
-          <el-menu-item v-if="userRole === 'pharmacist'" index="/layout/drugs/stock-in">
-            入库记录
-          </el-menu-item>
+          <el-menu-item index="/layout/drugs/stock-in">入库记录</el-menu-item>
         </el-sub-menu>
 
-        <el-menu-item v-if="userRole !== 'admin'" index="/layout/medication-records">
+        <el-menu-item v-if="userRole === 'pharmacist'" index="/layout/dispense-approve">
+          <el-icon><CircleCheck /></el-icon>
+          <template #title>审批发药</template>
+        </el-menu-item>
+
+        <el-menu-item v-if="userRole === 'doctor'" index="/layout/medication-records">
           <el-icon><Document /></el-icon>
           <template #title>用药记录</template>
         </el-menu-item>
@@ -121,7 +121,8 @@ import {
   Avatar,
   ArrowDown,
   Odometer,
-  List
+  List,
+  CircleCheck
 } from '@element-plus/icons-vue'
 
 const router = useRouter()

@@ -52,6 +52,15 @@ def scoped_active_med(request):
     return _scope_med_qs(active_medication_qs(), request)
 
 
+def fulfilled_medication_qs():
+    """已发药（已扣库存）的用药记录，用于消耗统计与图表。"""
+    return MedicationRecord.objects.filter(status='ACTIVE', dispense_status='dispensed')
+
+
+def scoped_fulfilled_med(request):
+    return _scope_med_qs(fulfilled_medication_qs(), request)
+
+
 def dashboard_scoped_drugs(request):
     qs = Drug.objects.all()
     r = _role(request.user) if request.user.is_authenticated else None
@@ -199,7 +208,7 @@ class DrugViewSet(viewsets.ModelViewSet):
         thirty_days_ago = timezone.now() - timedelta(days=30)
         
         # 获取所有药品的消耗统计
-        drug_consumption = scoped_active_med(request).filter(
+        drug_consumption = scoped_fulfilled_med(request).filter(
             record_time__gte=thirty_days_ago
         ).values('drug').annotate(
             total_consumption=Sum('quantity')
@@ -209,7 +218,7 @@ class DrugViewSet(viewsets.ModelViewSet):
         
         # 计算每日消耗量（用于计算标准差）
         drug_consumption_daily = defaultdict(list)
-        for record in scoped_active_med(request).filter(record_time__gte=thirty_days_ago):
+        for record in scoped_fulfilled_med(request).filter(record_time__gte=thirty_days_ago):
             drug_consumption_daily[record.drug_id].append(record.quantity)
         
         # 计算每个药品的动态阈值（使用时间序列分析公式）
@@ -293,24 +302,29 @@ class DrugViewSet(viewsets.ModelViewSet):
 
 
 class MedicationRecordViewSet(viewsets.ModelViewSet):
-    """用药记录视图集"""
+    """用药记录：医师开具处方（待发药，不扣库存）；药剂师审批发药后扣库存。"""
     queryset = MedicationRecord.objects.all()
     serializer_class = MedicationRecordSerializer
     permission_classes = [AllowAny]
 
     def get_permissions(self):
-        # 写操作必须登录，防止匿名开具/删除
-        if self.action in ['create', 'destroy', 'cancel']:
+        if self.action in [
+            'create', 'destroy', 'cancel', 'dispense', 'undo_dispense', 'reject_pending', 'department_users',
+        ]:
             return [IsAuthenticated()]
         return [AllowAny()]
 
     def get_queryset(self):
-        queryset = MedicationRecord.objects.all()
+        queryset = MedicationRecord.objects.all().order_by('-record_time', '-id')
         user_id = self.request.query_params.get('user', None)
         drug_id = self.request.query_params.get('drug', None)
         date_from = self.request.query_params.get('date_from', None)
         date_to = self.request.query_params.get('date_to', None)
         drug_name = (self.request.query_params.get('drug_name') or '').strip()
+        dispense_status = (self.request.query_params.get('dispense_status') or '').strip()
+        dispensed_by = (self.request.query_params.get('dispensed_by') or '').strip()
+        dispensed_from = self.request.query_params.get('dispensed_from', None)
+        dispensed_to = self.request.query_params.get('dispensed_to', None)
 
         r = _role(self.request.user) if self.request.user.is_authenticated else None
         if r in ('doctor', 'pharmacist'):
@@ -331,91 +345,259 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(record_time__date__gte=date_from)
         if date_to:
             queryset = queryset.filter(record_time__date__lte=date_to)
+        if dispense_status in ('pending', 'dispensed'):
+            queryset = queryset.filter(dispense_status=dispense_status)
+        if dispensed_by:
+            if dispensed_by.isdigit():
+                queryset = queryset.filter(dispensed_by_id=int(dispensed_by))
+            else:
+                queryset = queryset.filter(dispensed_by__username__icontains=dispensed_by)
+        if dispensed_from:
+            queryset = queryset.filter(dispensed_at__date__gte=dispensed_from)
+        if dispensed_to:
+            queryset = queryset.filter(dispensed_at__date__lte=dispensed_to)
 
         return queryset
 
     def perform_create(self, serializer):
-        """创建用药记录时自动扣除库存（事务 + 开具医师 + 审计）"""
+        """仅医师可开具处方：待发药，不扣库存；每张处方仅一种药品。"""
         from .services.log_service import log_operation
-        from .services.alert_service import maybe_alerts_for_drug, maybe_disease_spike_alert
-        from rest_framework.exceptions import PermissionDenied
+        from rest_framework.exceptions import PermissionDenied, ValidationError
+
+        role = _role(self.request.user) if self.request.user.is_authenticated else None
+        if role != 'doctor':
+            raise PermissionDenied('仅医师可开具处方。')
 
         drug = serializer.validated_data['drug']
         quantity = serializer.validated_data['quantity']
         disease_name = (serializer.validated_data.get('disease_name') or '').strip()
         rx = (serializer.validated_data.get('prescription_id') or '').strip()
-        if rx and active_medication_qs().filter(prescription_id=rx).exists():
-            from rest_framework.exceptions import ValidationError
+        if not rx:
+            raise ValidationError({'prescription_id': '开具处方必须带处方号；请使用系统「开具处方」入口。'})
+        if active_medication_qs().filter(prescription_id=rx).exists():
             raise ValidationError({
-                'prescription_id': '每张处方仅允许开具一种药品（一条用药记录），不可在同一处方号下添加第二种药品。',
+                'prescription_id': '每张处方仅允许开具一种药品（一条记录），不可在同一处方号下添加第二种药品。',
             })
+
+        patient_user_id = serializer.validated_data.pop('patient_user_id', None)
+        target_user = self.request.user
+        if patient_user_id is not None:
+            try:
+                target_user = User.objects.get(pk=patient_user_id)
+            except User.DoesNotExist:
+                raise ValidationError({'patient_user_id': '患者用户不存在'})
 
         today = date.today()
         if drug.expiry_date and drug.expiry_date < today:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({
-                'drug': f'该药品已过期（有效期：{drug.expiry_date}），无法出库'
+                'drug': f'该药品已过期（有效期：{drug.expiry_date}），不可开处方'
             })
 
-        role = _role(self.request.user) if self.request.user.is_authenticated else None
-        if role == 'admin':
-            raise PermissionDenied('管理员不可开具处方，请使用医生账号操作。')
-        prescribed_by = self.request.user if role == 'doctor' else None
-
-        dept = ''
-        if prescribed_by:
-            try:
-                dept = (prescribed_by.profile.department or '').strip()
-            except Exception:
-                dept = ''
-        elif self.request.user.is_authenticated:
-            try:
-                dept = (self.request.user.profile.department or '').strip()
-            except Exception:
-                dept = ''
+        try:
+            dept = (self.request.user.profile.department or '').strip()
+        except Exception:
+            dept = ''
 
         with transaction.atomic():
             d = Drug.objects.select_for_update().get(pk=drug.pk)
             if d.expiry_date and d.expiry_date < today:
-                from rest_framework.exceptions import ValidationError
                 raise ValidationError({
-                    'drug': f'该药品已过期（有效期：{d.expiry_date}），无法出库'
+                    'drug': f'该药品已过期（有效期：{d.expiry_date}），不可开处方'
                 })
             if d.stock < quantity:
-                from rest_framework.exceptions import ValidationError
                 raise ValidationError({
                     'quantity': f'库存不足，当前库存：{d.stock}件'
                 })
 
-            extra = {'department': dept, 'disease_name': disease_name}
-            if not serializer.validated_data.get('user'):
-                if self.request.user.is_authenticated:
-                    extra['user'] = self.request.user
-                else:
-                    default_user = User.objects.first()
-                    if default_user:
-                        extra['user'] = default_user
-            if prescribed_by is not None:
-                extra['prescribed_by'] = prescribed_by
-
-            instance = serializer.save(**extra)
-            d.stock -= quantity
-            d.save()
+            instance = serializer.save(
+                user=target_user,
+                department=dept,
+                disease_name=disease_name,
+                prescribed_by=self.request.user,
+                dispense_status='pending',
+            )
             log_operation(
-                user=self.request.user if self.request.user.is_authenticated else None,
+                user=self.request.user,
                 action_type='CREATE_PRESCRIPTION',
                 target_type='prescription',
                 target_id=instance.id,
-                detail=f'处方 {instance.prescription_id or "-"} 药品 {d.name} 数量 {quantity} 疾病:{disease_name or "-"}',
+                detail=f'处方 {instance.prescription_id} 待发药 患者:{target_user.username}(id={target_user.id}) '
+                f'药品 {d.name} 数量 {quantity} 疾病:{disease_name or "-"}',
+            )
+
+    def destroy(self, request, *args, **kwargs):
+        from rest_framework.exceptions import PermissionDenied as PD
+
+        instance = self.get_object()
+        role = _role(request.user)
+        if role not in ('admin', 'doctor'):
+            raise PD('无权删除')
+        if role == 'doctor' and instance.prescribed_by_id != request.user.id:
+            raise PD('无权删除')
+        with transaction.atomic():
+            if instance.status == 'ACTIVE' and instance.dispense_status == 'dispensed':
+                Drug.objects.filter(pk=instance.drug_id).update(stock=F('stock') + instance.quantity)
+            instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=['get'], url_path='department-users', permission_classes=[IsAuthenticated])
+    def department_users(self, request):
+        """开具处方时选择患者：本科室用户列表（不含管理员）。"""
+        from rest_framework.exceptions import PermissionDenied as PD
+
+        if _role(request.user) != 'doctor':
+            raise PD('仅医师可查询')
+        try:
+            dept = (request.user.profile.department or '').strip()
+        except Exception:
+            dept = ''
+        qs = User.objects.select_related('profile').exclude(profile__role='admin')
+        if dept:
+            qs = qs.filter(profile__department=dept)
+        results = [{'id': u.id, 'username': u.username} for u in qs.order_by('id')[:500]]
+        return Response({'results': results})
+
+    @action(detail=True, methods=['post'], url_path='dispense', permission_classes=[IsAuthenticated])
+    def dispense(self, request, pk=None):
+        """药剂师同意发药：核对患者用户ID后扣减库存。"""
+        from .services.log_service import log_operation
+        from .services.alert_service import maybe_alerts_for_drug, maybe_disease_spike_alert
+        from rest_framework.exceptions import PermissionDenied as PD, ValidationError
+
+        if _role(request.user) != 'pharmacist':
+            raise PD('仅药剂师可审批发药')
+        confirm_uid = request.data.get('confirm_user_id')
+        if confirm_uid is not None and str(confirm_uid).strip() == '':
+            confirm_uid = None
+        if confirm_uid is not None:
+            try:
+                confirm_uid = int(confirm_uid)
+            except (TypeError, ValueError):
+                raise ValidationError({'confirm_user_id': '患者用户ID须为数字'})
+
+        with transaction.atomic():
+            record = MedicationRecord.objects.select_for_update().select_related('drug', 'user').get(pk=pk)
+            if record.status != 'ACTIVE':
+                return Response({'error': '该记录已作废'}, status=status.HTTP_400_BAD_REQUEST)
+            if record.dispense_status != 'pending':
+                return Response({'error': '该处方已发药或不可重复发药'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                pdept = (request.user.profile.department or '').strip()
+            except Exception:
+                pdept = ''
+            if pdept and (record.department or '').strip() and (record.department or '').strip() != pdept:
+                raise PD('非本科室处方，无权发药')
+            if confirm_uid is not None and confirm_uid != record.user_id:
+                raise ValidationError({'confirm_user_id': f'与处方患者不一致（处方用户ID为 {record.user_id}）'})
+
+            d = Drug.objects.select_for_update().get(pk=record.drug_id)
+            today = date.today()
+            if d.expiry_date and d.expiry_date < today:
+                return Response({'error': '药品已过期，无法发药'}, status=status.HTTP_400_BAD_REQUEST)
+            if d.stock < record.quantity:
+                return Response(
+                    {'error': f'库存不足，当前库存 {d.stock}，需 {record.quantity}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            d.stock -= record.quantity
+            d.save()
+            now = timezone.now()
+            record.dispense_status = 'dispensed'
+            record.dispensed_at = now
+            record.dispensed_by = request.user
+            record.save()
+            log_operation(
+                user=request.user,
+                action_type='APPROVE_DISPENSE',
+                target_type='prescription',
+                target_id=record.id,
+                detail=f'发药 记录#{record.id} 处方 {record.prescription_id} 患者 {record.user.username}(id={record.user_id}) '
+                f'{d.name} x{record.quantity}',
             )
             d2 = Drug.objects.select_for_update().get(pk=d.pk)
-            maybe_alerts_for_drug(d2, dept or d2.department or '')
+            maybe_alerts_for_drug(d2, (record.department or d2.department or ''))
 
-        maybe_disease_spike_alert(disease_name, dept)
+        maybe_disease_spike_alert(record.disease_name, record.department or '')
+        out = MedicationRecordSerializer(record, context={'request': request}).data
+        return Response(out)
+
+    @action(detail=True, methods=['post'], url_path='reject-pending', permission_classes=[IsAuthenticated])
+    def reject_pending(self, request, pk=None):
+        """药剂师拒绝待发药处方（患者未取药等），不扣库存。"""
+        from .services.log_service import log_operation
+        from rest_framework.exceptions import PermissionDenied as PD
+
+        if _role(request.user) != 'pharmacist':
+            raise PD('仅药剂师可操作')
+        with transaction.atomic():
+            record = MedicationRecord.objects.select_for_update().get(pk=pk)
+            if record.status != 'ACTIVE' or record.dispense_status != 'pending':
+                return Response({'error': '仅可拒绝「待发药」记录'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                pdept = (request.user.profile.department or '').strip()
+            except Exception:
+                pdept = ''
+            if pdept and (record.department or '').strip() and (record.department or '').strip() != pdept:
+                raise PD('非本科室处方')
+            now = timezone.now()
+            record.status = 'CANCELLED'
+            record.cancelled_at = now
+            record.save()
+            log_operation(
+                user=request.user,
+                action_type='REJECT_DISPENSE',
+                target_type='prescription',
+                target_id=record.id,
+                detail=f'拒绝待发药 记录#{record.id} 处方 {record.prescription_id}',
+            )
+        return Response({'message': '已拒绝', 'id': record.id})
+
+    @action(detail=True, methods=['post'], url_path='undo-dispense', permission_classes=[IsAuthenticated])
+    def undo_dispense(self, request, pk=None):
+        """撤销发药：回补库存并退回待发药，便于点错后重审。"""
+        from .services.log_service import log_operation
+        from .services.alert_service import maybe_alerts_for_drug
+        from rest_framework.exceptions import PermissionDenied as PD
+
+        if _role(request.user) != 'pharmacist':
+            raise PD('仅药剂师可撤销发药')
+
+        with transaction.atomic():
+            record = MedicationRecord.objects.select_for_update().select_related('drug').get(pk=pk)
+            if record.status != 'ACTIVE':
+                return Response({'error': '该记录已作废，无法撤销发药'}, status=status.HTTP_400_BAD_REQUEST)
+            if record.dispense_status != 'dispensed':
+                return Response({'error': '仅已发药记录可撤销发药'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                pdept = (request.user.profile.department or '').strip()
+            except Exception:
+                pdept = ''
+            if pdept and (record.department or '').strip() and (record.department or '').strip() != pdept:
+                raise PD('非本科室处方，无权撤销发药')
+
+            d = Drug.objects.select_for_update().get(pk=record.drug_id)
+            d.stock += record.quantity
+            d.save()
+            record.dispense_status = 'pending'
+            record.dispensed_at = None
+            record.dispensed_by = None
+            record.save()
+            log_operation(
+                user=request.user,
+                action_type='REJECT_DISPENSE',
+                target_type='prescription',
+                target_id=record.id,
+                detail=f'撤销发药 记录#{record.id} 处方 {record.prescription_id}',
+            )
+            d2 = Drug.objects.select_for_update().get(pk=d.pk)
+            maybe_alerts_for_drug(d2, (record.department or d2.department or ''))
+
+        out = MedicationRecordSerializer(record, context={'request': request}).data
+        return Response(out)
 
     @action(detail=True, methods=['post'], url_path='cancel', permission_classes=[IsAuthenticated])
     def cancel(self, request, pk=None):
-        """撤销处方：同一处方号下所有有效记录一并回滚库存"""
+        """撤销处方：待发药不涉库存；已发药回滚库存。"""
         record = self.get_object()
         if record.status != 'ACTIVE':
             return Response({'error': '该记录已作废'}, status=status.HTTP_400_BAD_REQUEST)
@@ -424,6 +606,14 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
         can = role == 'admin'
         if not can and record.prescribed_by_id and record.prescribed_by_id == request.user.id:
             can = True
+        if not can and role == 'pharmacist' and record.dispense_status == 'pending':
+            try:
+                pdept = (request.user.profile.department or '').strip()
+            except Exception:
+                pdept = ''
+            rdept = (record.department or '').strip()
+            if pdept and rdept and pdept == rdept:
+                can = True
         if not can:
             return Response({'error': '无权撤销该处方'}, status=status.HTTP_403_FORBIDDEN)
 
@@ -439,7 +629,8 @@ class MedicationRecordViewSet(viewsets.ModelViewSet):
                 qs = MedicationRecord.objects.select_for_update().filter(pk=record.pk, status='ACTIVE')
 
             for r in qs:
-                Drug.objects.filter(pk=r.drug_id).update(stock=F('stock') + r.quantity)
+                if r.dispense_status == 'dispensed':
+                    Drug.objects.filter(pk=r.drug_id).update(stock=F('stock') + r.quantity)
             now = timezone.now()
             qs.update(status='CANCELLED', cancelled_at=now)
             log_operation(
@@ -577,11 +768,17 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(UserSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
 
     def get_queryset(self):
-        """获取查询集，支持按用户名搜索"""
+        """获取查询集，支持按用户名/角色/科室筛选"""
         queryset = User.objects.select_related('profile').all()
-        username = self.request.query_params.get('username', None)
-        if username is not None:
+        username = (self.request.query_params.get('username') or '').strip()
+        role = (self.request.query_params.get('role') or '').strip()
+        department = (self.request.query_params.get('department') or '').strip()
+        if username:
             queryset = queryset.filter(username__icontains=username)
+        if role in ('admin', 'doctor', 'pharmacist'):
+            queryset = queryset.filter(profile__role=role)
+        if department:
+            queryset = queryset.filter(profile__department__icontains=department)
         return queryset
 
     def update(self, request, *args, **kwargs):
@@ -611,6 +808,52 @@ class UserViewSet(viewsets.ModelViewSet):
         updated_instance = User.objects.select_related('profile').get(pk=instance.pk)
         updated_serializer = self.get_serializer(updated_instance)
         return Response(updated_serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """兼容旧删除入口：改为停用账号，保留员工资料。"""
+        return self.deactivate(request, pk=kwargs.get('pk'))
+
+    @action(detail=True, methods=['post'], url_path='deactivate', permission_classes=[IsAuthenticated, IsAdmin])
+    def deactivate(self, request, pk=None):
+        """停用员工账号（不可登录，资料保留）。"""
+        from .services.log_service import log_operation
+
+        user = self.get_object()
+        if user.id == request.user.id:
+            return Response({'error': '不可停用当前登录管理员账号'}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.is_active:
+            return Response({'message': '账号已是停用状态'})
+        user.is_active = False
+        user.save(update_fields=['is_active'])
+        log_operation(
+            user=request.user,
+            action_type='UPDATE_USER_ROLE',
+            target_type='user',
+            target_id=user.id,
+            detail=f'停用账号 {user.username}',
+        )
+        data = self.get_serializer(user).data
+        return Response({'message': '已停用', 'user': data})
+
+    @action(detail=True, methods=['post'], url_path='activate', permission_classes=[IsAuthenticated, IsAdmin])
+    def activate(self, request, pk=None):
+        """启用员工账号。"""
+        from .services.log_service import log_operation
+
+        user = self.get_object()
+        if user.is_active:
+            return Response({'message': '账号已是启用状态'})
+        user.is_active = True
+        user.save(update_fields=['is_active'])
+        log_operation(
+            user=request.user,
+            action_type='UPDATE_USER_ROLE',
+            target_type='user',
+            target_id=user.id,
+            detail=f'启用账号 {user.username}',
+        )
+        data = self.get_serializer(user).data
+        return Response({'message': '已启用', 'user': data})
 
 
 class DashboardViewSet(viewsets.ViewSet):
@@ -652,7 +895,7 @@ class DashboardViewSet(viewsets.ViewSet):
             end_date = today
             start_date = today - timedelta(days=30)
 
-        med = scoped_active_med(request)
+        med = scoped_fulfilled_med(request)
         if start_date and end_date:
             med = med.filter(record_time__date__gte=start_date, record_time__date__lte=end_date)
         total_medication_count = med.count()
@@ -697,7 +940,7 @@ class DashboardViewSet(viewsets.ViewSet):
         start_date = end_date - timedelta(days=30)
         
         # 按日期聚合用药记录
-        records = scoped_active_med(request).filter(
+        records = scoped_fulfilled_med(request).filter(
             record_time__date__gte=start_date,
             record_time__date__lte=end_date
         ).annotate(
@@ -744,7 +987,7 @@ class DashboardViewSet(viewsets.ViewSet):
             start_date = timezone.now().date() - timedelta(days=90)
             
             # 按prescription_id分组，获取同一处方下的所有药品
-            records = scoped_active_med(request).filter(
+            records = scoped_fulfilled_med(request).filter(
                 record_time__date__gte=start_date
             ).exclude(prescription_id='').select_related('drug').values('prescription_id', 'drug_id').distinct()
             
@@ -757,7 +1000,7 @@ class DashboardViewSet(viewsets.ViewSet):
             
             # 统计每个药品的总消耗量（用于节点大小）
             drug_total_consumption = defaultdict(int)
-            for record in scoped_active_med(request).all():
+            for record in scoped_fulfilled_med(request).all():
                 drug_total_consumption[record.drug_id] += record.quantity
             
             # 使用itertools.combinations统计药品共现
@@ -835,7 +1078,7 @@ class DashboardViewSet(viewsets.ViewSet):
         """获取库存紧缺Top10（引入缺口程度概念）"""
         # 计算每个药品的库存紧缺程度（基于动态阈值）
         thirty_days_ago = timezone.now() - timedelta(days=30)
-        drug_consumption = scoped_active_med(request).filter(
+        drug_consumption = scoped_fulfilled_med(request).filter(
             record_time__gte=thirty_days_ago
         ).values('drug').annotate(
             total_consumption=Sum('quantity')
@@ -845,7 +1088,7 @@ class DashboardViewSet(viewsets.ViewSet):
         
         # 计算每日消耗量（用于计算标准差）
         drug_consumption_daily = defaultdict(list)
-        for record in scoped_active_med(request).filter(record_time__gte=thirty_days_ago):
+        for record in scoped_fulfilled_med(request).filter(record_time__gte=thirty_days_ago):
             drug_consumption_daily[record.drug_id].append(record.quantity)
         
         low_stock_drugs = []
@@ -989,7 +1232,7 @@ class DashboardViewSet(viewsets.ViewSet):
         end_date = timezone.now().date()
         
         # 按月聚合所有药品的消耗
-        records = scoped_active_med(request).filter(
+        records = scoped_fulfilled_med(request).filter(
             record_time__date__gte=start_date,
             record_time__date__lte=end_date
         ).annotate(
@@ -1046,7 +1289,7 @@ class DashboardViewSet(viewsets.ViewSet):
             start_date = timezone.now().date() - timedelta(days=90)
             
             # 按prescription_id分组，获取同一处方下的所有药品
-            records = scoped_active_med(request).filter(
+            records = scoped_fulfilled_med(request).filter(
                 record_time__date__gte=start_date
             ).exclude(prescription_id='').select_related('drug').values('prescription_id', 'drug_id').distinct()
             

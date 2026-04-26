@@ -93,6 +93,22 @@ export const medicationApi = {
 
   cancelPrescription(id) {
     return api.post(`/medication-records/${id}/cancel/`)
+  },
+
+  departmentUsers() {
+    return api.get('/medication-records/department-users/')
+  },
+
+  dispense(id, data = {}) {
+    return api.post(`/medication-records/${id}/dispense/`, data)
+  },
+
+  undoDispense(id) {
+    return api.post(`/medication-records/${id}/undo-dispense/`)
+  },
+
+  rejectPending(id) {
+    return api.post(`/medication-records/${id}/reject-pending/`)
   }
 }
 
@@ -133,6 +149,19 @@ export const userApi = {
   // 部分更新用户
   patchUser(id, data) {
     return api.patch(`/users/${id}/`, data)
+  },
+
+  // 删除用户
+  deleteUser(id) {
+    return api.delete(`/users/${id}/`)
+  },
+
+  deactivateUser(id) {
+    return api.post(`/users/${id}/deactivate/`)
+  },
+
+  activateUser(id) {
+    return api.post(`/users/${id}/activate/`)
   }
 }
 

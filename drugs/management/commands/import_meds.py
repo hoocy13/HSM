@@ -336,7 +336,9 @@ class Command(BaseCommand):
         for pair_info in high_frequency_pairs:
             target_count = pair_info['target_count']
             pair_drugs = pair_info['drugs']
-            
+            if not pair_drugs:
+                continue
+
             for _ in range(target_count):
                 # 使用均匀分布生成日期（start_date ~ end_date）
                 days_ago = random.randint(0, total_days - 1)
@@ -350,46 +352,43 @@ class Command(BaseCommand):
                 user = random.choice(demo_users) if demo_users else random.choice(users)
                 doctor = random.choice(doctors) if doctors else None
                 dept = (doctor.profile.department if doctor and hasattr(doctor, 'profile') else '') or ''
-                disease_name = infer_disease(pair_drugs[0].name, record_date)
-                
-                # 为同一处方生成多条记录（同一处方下的所有药品）
-                for drug in pair_drugs:
-                    quantity = random.randint(1, 10)
-                    hour = random.randint(8, 18)
-                    minute = random.randint(0, 59)
-                    second = random.randint(0, 59)
-                    # 使用 datetime.combine 确保时区正确
-                    from datetime import time as dt_time
-                    # record_date 已经是 datetime 对象，直接使用
-                    record_time = record_date.replace(hour=hour, minute=minute, second=second)
-                    
-                    record = MedicationRecord(
-                        user_id=user.id,
-                        drug_id=drug.id,
-                        prescription_id=prescription_id,
-                        quantity=quantity,
-                        record_time=record_time,
-                        notes=None,
-                        status='ACTIVE',
-                        prescribed_by=doctor,
-                        disease_name=disease_name,
-                        department=dept,
-                    )
-                    records.append(record)
-                    
-                    if len(records) >= batch_size:
-                        MedicationRecord.objects.bulk_create(records, ignore_conflicts=True)
-                        records = []
+                drug = random.choice(pair_drugs)
+                disease_name = infer_disease(drug.name, record_date)
+                quantity = random.randint(1, 10)
+                hour = random.randint(8, 18)
+                minute = random.randint(0, 59)
+                second = random.randint(0, 59)
+                from datetime import time as dt_time
+                record_time = record_date.replace(hour=hour, minute=minute, second=second)
+
+                record = MedicationRecord(
+                    user_id=user.id,
+                    drug_id=drug.id,
+                    prescription_id=prescription_id,
+                    quantity=quantity,
+                    record_time=record_time,
+                    notes=None,
+                    status='ACTIVE',
+                    dispense_status='dispensed',
+                    prescribed_by=doctor,
+                    disease_name=disease_name,
+                    department=dept,
+                )
+                records.append(record)
+
+                if len(records) >= batch_size:
+                    MedicationRecord.objects.bulk_create(records, ignore_conflicts=True)
+                    records = []
 
         # 第二步：生成普通处方（随机组合，count 1-5）
         self.stdout.write('生成普通处方...')
         target_count = 10000
-        high_freq_count = sum(pair['target_count'] * len(pair['drugs']) for pair in high_frequency_pairs)
+        high_freq_count = sum(pair['target_count'] for pair in high_frequency_pairs)
         remaining_count = max(0, target_count - high_freq_count)
         
-        # 计算需要生成的处方数量（每个处方1-3种药品）
-        avg_drugs_per_prescription = 2
-        num_prescriptions = remaining_count // avg_drugs_per_prescription
+        # 每个处方仅一种药品（与系统业务一致）
+        avg_drugs_per_prescription = 1
+        num_prescriptions = remaining_count // max(avg_drugs_per_prescription, 1)
         
         for i in range(num_prescriptions):
             # 使用均匀分布生成日期（start_date ~ end_date）
@@ -413,8 +412,8 @@ class Command(BaseCommand):
             doctor = random.choice(doctors) if doctors else None
             dept = (doctor.profile.department if doctor and hasattr(doctor, 'profile') else '') or ''
             
-            # 每个处方随机包含1-3种药品
-            num_drugs_in_prescription = random.randint(1, 3)
+            # 每个处方仅一种药品
+            num_drugs_in_prescription = 1
             
             # 如果是冬季，增加感冒类药品的概率
             if is_winter and random.random() < 0.3:
@@ -459,6 +458,7 @@ class Command(BaseCommand):
                     record_time=record_time,
                     notes=notes,
                     status='ACTIVE',
+                    dispense_status='dispensed',
                     prescribed_by=doctor,
                     disease_name=disease_name,
                     department=dept,
@@ -495,8 +495,10 @@ class Command(BaseCommand):
         """根据用药记录更新药品库存"""
         # 按药品统计总消耗量
         from django.db.models import Sum
-        consumption = MedicationRecord.objects.values('drug').annotate(
-            total_consumption=Sum('quantity')
+        consumption = (
+            MedicationRecord.objects.filter(status='ACTIVE', dispense_status='dispensed')
+            .values('drug')
+            .annotate(total_consumption=Sum('quantity'))
         )
         
         updated_count = 0

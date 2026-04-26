@@ -65,6 +65,10 @@ class MedicationRecord(models.Model):
         ('ACTIVE', '有效'),
         ('CANCELLED', '已作废'),
     ]
+    DISPENSE_STATUS_CHOICES = [
+        ('pending', '待审批发药'),
+        ('dispensed', '已发药'),
+    ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="用户", related_name="medication_records")
     drug = models.ForeignKey(Drug, on_delete=models.CASCADE, verbose_name="药品", related_name="medication_records")
@@ -85,11 +89,28 @@ class MedicationRecord(models.Model):
     disease_name = models.CharField(max_length=100, blank=True, default='', verbose_name="疾病/诊断标签", db_index=True)
     department = models.CharField(max_length=100, blank=True, default='', verbose_name="科室", db_index=True)
     cancelled_at = models.DateTimeField(null=True, blank=True, verbose_name="作废时间")
+    dispense_status = models.CharField(
+        max_length=20,
+        choices=DISPENSE_STATUS_CHOICES,
+        default='dispensed',
+        verbose_name='发药状态',
+        help_text='医师开具后为待审批；药剂师同意发药后扣减库存并置为已发药',
+        db_index=True,
+    )
+    dispensed_at = models.DateTimeField(null=True, blank=True, verbose_name='发药时间')
+    dispensed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='dispensed_medication_records',
+        verbose_name='发药人',
+    )
 
     class Meta:
         verbose_name = "用药记录"
         verbose_name_plural = "用药记录"
-        ordering = ['-record_time']
+        ordering = ['-record_time', '-id']
 
     def __str__(self):
         return f"{self.user.username} - {self.drug.name} - {self.quantity}件"
@@ -174,6 +195,8 @@ class OperationLog(models.Model):
         ('CREATE_ANNOUNCEMENT', 'CREATE_ANNOUNCEMENT'),
         ('UPDATE_ANNOUNCEMENT', 'UPDATE_ANNOUNCEMENT'),
         ('DELETE_ANNOUNCEMENT', 'DELETE_ANNOUNCEMENT'),
+        ('APPROVE_DISPENSE', 'APPROVE_DISPENSE'),
+        ('REJECT_DISPENSE', 'REJECT_DISPENSE'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='operation_logs')

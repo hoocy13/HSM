@@ -33,7 +33,6 @@
     <el-dialog v-model="dayDialogVisible" :title="dayDialogTitle" width="900px" destroy-on-close>
       <el-table :data="dayRecords" v-loading="dayRecordsLoading" stripe max-height="480">
         <el-table-column prop="id" label="记录ID" width="90" />
-        <el-table-column prop="prescription_id" label="处方号" width="140" show-overflow-tooltip />
         <el-table-column prop="drug_name" label="药品" min-width="120" />
         <el-table-column prop="disease_name" label="疾病/诊断" width="120" show-overflow-tooltip />
         <el-table-column label="用户" width="100">
@@ -85,6 +84,7 @@ const openDayRecords = async (dateStr) => {
     const { data } = await medicationApi.getRecords({
       date_from: dateStr,
       date_to: dateStr,
+      dispense_status: 'dispensed',
       page_size: 500
     })
     dayRecords.value = data.results || []
